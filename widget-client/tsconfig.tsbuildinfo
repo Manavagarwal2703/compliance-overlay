@@ -1,0 +1,1 @@
+{"root":["./src/mount.tsx","./src/vite-env.d.ts","./src/components/chatwidget.tsx","./src/hooks/usechatstream.ts","./src/store/usechatstore.ts"],"version":"5.9.3"}
