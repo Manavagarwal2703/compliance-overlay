@@ -1,18 +1,29 @@
-﻿# Node & Next.js
+# ── Node / Next.js (gateway-service) ──────────────────────────────────────────
 node_modules/
 .next/
 dist/
+tsconfig.tsbuildinfo
 
-# Python
+# ── Python / FastAPI (ai-service) ─────────────────────────────────────────────
+.venv/
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Environment Variables & Secrets
+# ── Environment variables & secrets ───────────────────────────────────────────
+# NEVER commit real .env files. Each module ships a .env.example as the template.
 .env
-*.env
 .env.local
+.env.production
+.env.production.local
+.env.development.local
 
-# OS
+# Explicitly keep example/template files so the team knows what vars are needed.
+!.env.example
+
+# ── OS artefacts ──────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini

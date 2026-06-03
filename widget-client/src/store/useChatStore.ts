@@ -180,8 +180,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadSession: async (sessionId) => {
     set({ activeSessionId: sessionId, messages: [], error: null, isSidebarOpen: false });
     try {
+      const gatewayBase =
+        import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:3000";
       const res = await fetch(
-        `http://localhost:3000/api/chat/history/${sessionId}`
+        `${gatewayBase}/api/chat/history/${sessionId}`
       );
       if (!res.ok) throw new Error(`History fetch failed: ${res.status}`);
       // API returns { sessionId, messages: [...] } — destructure the envelope
@@ -202,8 +204,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadSessions: async (userId) => {
     if (!userId) return;
     try {
+      const gatewayBase =
+        import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:3000";
       const res = await fetch(
-        `http://localhost:3000/api/chat/history?userId=${encodeURIComponent(userId)}`
+        `${gatewayBase}/api/chat/history?userId=${encodeURIComponent(userId)}`
       );
       if (!res.ok) return; // silently ignore — sidebar will just stay empty
       // API returns { sessions: [...] }
