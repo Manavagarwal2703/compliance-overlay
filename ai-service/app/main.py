@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app.models.contracts import ChatStreamRequest
-from app.routers.semantic_router import route_and_stream
+from app.routers.semantic_router import route_query
 
 app = FastAPI(
     title="Compliance AI Service",
@@ -36,7 +36,7 @@ async def chat_stream(request: ChatStreamRequest) -> StreamingResponse:
     """Contract B endpoint — streams Contract C SSE chunks."""
 
     async def event_generator():
-        async for chunk in route_and_stream(request):
+        async for chunk in route_query(request):
             yield chunk
 
     return StreamingResponse(

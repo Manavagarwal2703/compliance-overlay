@@ -325,21 +325,24 @@ export function ChatWidget() {
                     {msg.role}
                   </span>
                   <p className="whitespace-pre-wrap break-words">
-                    {msg.content}
-                    {msg.isStreaming && (
-                      <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current opacity-60" />
+                    {msg.role === "assistant" && msg.isStreaming && !msg.content ? (
+                      <span className="flex h-5 items-center gap-1.5">
+                        <span className="block h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:-0.3s]"></span>
+                        <span className="block h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:-0.15s]"></span>
+                        <span className="block h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400"></span>
+                      </span>
+                    ) : (
+                      <>
+                        {msg.content}
+                        {msg.isStreaming && (
+                          <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-current opacity-60" />
+                        )}
+                      </>
                     )}
                   </p>
                 </div>
               </div>
             ))}
-
-            {/* Loading indicator when assistant is composing */}
-            {isStreaming && messages.length > 0 && !messages.at(-1)?.content && (
-              <div className="flex justify-start">
-                <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-              </div>
-            )}
           </div>
 
           {/* ── Error banner ────────────────────────────────────────────── */}
@@ -365,12 +368,12 @@ export function ChatWidget() {
                   : "Type your question…"
               }
               disabled={isStreaming}
-              className="flex-1 rounded-xl border border-slate-200 bg-abb-surface px-3 py-2 text-sm outline-none focus:border-abb-primary focus:ring-1 focus:ring-abb-primary disabled:opacity-50"
+              className="flex-1 rounded-xl border border-slate-200 bg-abb-surface px-3 py-2 text-sm outline-none focus:border-abb-primary focus:ring-1 focus:ring-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
             />
             <button
               type="submit"
               disabled={isStreaming || !input.trim()}
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-abb-primary text-white transition hover:bg-red-700 disabled:opacity-40"
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-abb-primary text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
               aria-label="Send message"
             >
               {isStreaming ? (

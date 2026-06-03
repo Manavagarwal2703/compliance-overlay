@@ -220,40 +220,33 @@ data: {"type": "error", "content": "LLM provider error: rate limit exceeded"}
 
 ---
 
-## Semantic Router Architecture
+## Context Aggregator Pipeline
 
-The semantic router is implemented in `app/routers/semantic_router.py`. It runs **before** streaming begins, using the LLM itself to classify each query into one of three intents via a structured Pydantic JSON output parser.
+The routing logic is implemented in `app/routers/semantic_router.py` using a deterministic, multi-stage **Context Aggregator Pipeline**. It runs sequentially before any LLM text streaming begins.
 
-### Intent Classification
+### Step 1: Security Guardrail
 
-```python
-def analyze_intent(query: str, chat_history: list) -> Intent:
-    """
-    Uses the LLM (non-streaming) to classify the query into one of:
-    - REPORT_QUERY      → compliance data, control status, audit evidence
-    - KNOWLEDGE_BASE    → policies, procedures, upload instructions
-    - GENERAL_CHAT      → greetings, meta questions, out-of-scope
-    Returns the intent enum value.
-    """
-```
+Before parsing the user's intent, the query is passed through a strict LLM guardrail enforced by a `GuardrailResult` Pydantic model (`is_safe: bool`, `violation_type: str`).
+- **Detection**: It explicitly blocks malicious intents, jailbreak attempts, and requests for raw source code.
+- **Escalation Logic**: If `is_safe` is False, the pipeline halts immediately. It checks the conversation history:
+  - *First Offense*: Yields a polite but firm SSE response refusing to answer.
+  - *Repeat Offense*: Yields a severe SSE response: "Repeated violation detected. This interaction has been reported to the required security personnel."
 
-### Intent → Handler Mapping
+### Step 2: Extractor
 
-| Intent | Data Source | Current Behaviour | Production Target |
-|--------|-------------|-------------------|-------------------|
-| `REPORT_QUERY` | Structured compliance DB (controls, evidence, status, reason) | Mock SSE response `[MOCK REPORT DATA]` | Real DB query → LLM augmented stream |
-| `KNOWLEDGE_BASE` | Vector KB (policies, upload rules, evidence standards) | Mock SSE response `[MOCK KNOWLEDGE BASE]` | ChromaDB retrieval → LLM augmented stream |
-| `GENERAL_CHAT` | None — conversational fallback | Mock SSE greeting | Direct `llm.astream()` |
+If the query passes the guardrail, an LLM extracts the required context parameters using the `QueryExtraction` Pydantic model:
+- `needs_kb` (bool): Does the query require knowledge base data (policies, rules)?
+- `needs_report` (bool): Does it require compliance report data?
+- `controls_mentioned` (list[str]): Any specific controls mentioned (e.g., AC-2)?
 
-### Example Routing Decisions
+### Step 3: Pluggable Fetchers
 
-| Query | Classified As |
-|-------|---------------|
-| `"Why did control AC-2 fail with partial compliance?"` | `REPORT_QUERY` |
-| `"What controls are in scope for this audit?"` | `REPORT_QUERY` |
-| `"How do I upload evidence for a control?"` | `KNOWLEDGE_BASE` |
-| `"What does the GDPR data retention policy require?"` | `KNOWLEDGE_BASE` |
-| `"Hello! What can you help me with?"` | `GENERAL_CHAT` |
+Based on the extracted requirements, the pipeline concurrently executes async fetchers (`fetch_vector_kb` and `fetch_report_db`). 
+*Note: These are currently mocked and return placeholder strings with `# TODO` markers ready for ChromaDB and PostgreSQL integration.*
+
+### Step 4: Synthesizer
+
+The results from the fetchers are aggregated into a massive `SystemMessage` providing strict context to the LLM. Finally, the response is streamed back to the Gateway using `llm.astream()`, strictly adhering to the Contract C SSE format (`data: {"type": "token", "content": "..."}\n\n`).
 
 ---
 

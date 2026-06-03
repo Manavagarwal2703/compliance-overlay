@@ -37,19 +37,20 @@ flowchart TB
   end
 
   subgraph ai["ai-service  :8000"]
-    ROUTER["Semantic Intent Router"]
-    FAST["Fast path — Groq / Azure"]
-    RAG["RAG path — Groq / Azure"]
+    PIPELINE["Context Aggregator Pipeline"]
+    GUARD["Security Guardrail"]
+    EXTRACT["Extractor & Fetchers"]
+    SYNTH["Synthesizer (Groq/Azure)"]
   end
 
   WC -->|"HTML attributes"| UI
   UI -->|"Contract A  POST /api/chat"| API
   API --> DB
-  API -->|"Contract B  POST /v1/chat/stream"| ROUTER
-  ROUTER --> FAST
-  ROUTER --> RAG
-  FAST -->|"Contract C  SSE"| API
-  RAG -->|"Contract C  SSE"| API
+  API -->|"Contract B  POST /v1/chat/stream"| PIPELINE
+  PIPELINE --> GUARD
+  GUARD --> EXTRACT
+  EXTRACT --> SYNTH
+  SYNTH -->|"Contract C  SSE"| API
   API -->|"Contract C  SSE passthrough"| UI
 ```
 
@@ -57,9 +58,9 @@ flowchart TB
 
 | Module | Port (dev) | Responsibility | Stack |
 |--------|------------|----------------|-------|
-| [widget-client](./widget-client/) | 5173 | Shadow DOM Web Component, chat UI, session history sidebar, SSE client | React 19, Vite 6, Zustand 5, Tailwind CSS 3 |
+| [widget-client](./widget-client/) | 5173 | Shadow DOM Web Component, chat UI, session history sidebar, SSE client. **Features input locking and a loading skeleton during extraction latency.** | React 19, Vite 6, Zustand 5, Tailwind CSS 3 |
 | [gateway-service](./gateway-service/) | 3000 | Session upsert, message persistence, SSE stream proxy | Next.js 16.1.4, Prisma 7, PostgreSQL |
-| [ai-service](./ai-service/) | 8000 | Semantic routing, RAG retrieval, LLM streaming | FastAPI, LangChain, Groq / Azure OpenAI |
+| [ai-service](./ai-service/) | 8000 | **Context Aggregator Pipeline**, Security Guardrails, entity extraction, RAG retrieval, LLM streaming | FastAPI, LangChain, Groq / Azure OpenAI |
 
 **Isolation rule:** No shared packages, no monorepo libs, no cross-folder imports. Integration is HTTP-contract-only.
 

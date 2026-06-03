@@ -133,6 +133,17 @@ widget.setAttribute('open', 'true');
 
 ---
 
+## UX Improvements for Streaming Latency
+
+With the new "Context Aggregator Pipeline" running on the backend, there is a natural latency before the first SSE token is streamed. To handle this gracefully, the UI features:
+
+1. **Pre-Stream Loading Skeleton**: Before the first token arrives, an empty AI chat bubble appears containing a sleek, Tailwind-styled pulsing 3-dot skeleton. Once the backend begins streaming real text, the skeleton vanishes and the text streams naturally.
+2. **Input Locking**: While the backend is fetching context and streaming its response (indicated by the `isStreaming` state in Zustand), both the text input and the "Send" button are fully disabled. They exhibit lowered opacity and a "not-allowed" cursor to clearly signal to the user that they must wait for the current response to complete.
+
+Both of these features rely seamlessly on the centralized `isStreaming` boolean managed within `useChatStore`.
+
+---
+
 ## State Architecture — Zustand (`src/store/useChatStore.ts`)
 
 The entire widget state lives in a single flat Zustand store. There is no React Context, no prop drilling, and no external state management dependency beyond Zustand itself.
