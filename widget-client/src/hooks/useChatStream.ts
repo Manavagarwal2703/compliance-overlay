@@ -24,6 +24,7 @@ function parseSseLine(line: string): SsePayload | null {
 
 export function useChatStream() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const userId = useChatStore((s) => s.userId);
   const userRole = useChatStore((s) => s.userRole);
   const gatewayUrl = useChatStore((s) => s.gatewayUrl);
   const isStreaming = useChatStore((s) => s.isStreaming);
@@ -55,6 +56,7 @@ export function useChatStream() {
           },
           body: JSON.stringify({
             sessionId: activeSessionId,
+            userId,
             role: userRole,
             message: trimmed,
           }),
@@ -116,6 +118,7 @@ export function useChatStream() {
     },
     [
       activeSessionId,
+      userId,
       userRole,
       gatewayUrl,
       isStreaming,

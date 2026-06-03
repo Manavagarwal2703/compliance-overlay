@@ -1,8 +1,8 @@
 # Widget Client
 
-Embeddable **Compliance Chat** UI packaged as a **Web Component** (`<compliance-chat-overlay>`) with **Shadow DOM** style isolation. Built with React 19, Zustand 5, and Tailwind CSS 3 — shipped as a self-contained library bundle via Vite.
+Embeddable **Compliance Chat** UI packaged as a **Web Component** (`<compliance-chat-overlay>`) with **Shadow DOM** style isolation. Built with React 19, Zustand 5, and Tailwind CSS 3, compiled to a self-contained library bundle by Vite 6.
 
-The widget talks to the gateway over **Contract A** and consumes streaming **Contract C** SSE responses. It imports nothing from outside the `widget-client` folder.
+The widget talks to the gateway over **Contract A** and consumes **Contract C** SSE responses. It imports nothing from outside the `widget-client` folder.
 
 ---
 
@@ -11,10 +11,10 @@ The widget talks to the gateway over **Contract A** and consumes streaming **Con
 ```mermaid
 flowchart LR
   HOST["Host page DOM"]
-  CE["&lt;compliance-chat-overlay&gt;"]
+  CE["<compliance-chat-overlay\nuser-role='reviewer'\nuser-id='usr_123'>"]
   SHADOW["Shadow Root + inlined Tailwind"]
   REACT["ChatWidget React tree"]
-  GW["gateway-service /api/chat"]
+  GW["gateway-service\n:3000/api/chat"]
 
   HOST -->|"HTML attributes"| CE
   CE --> SHADOW
@@ -23,21 +23,21 @@ flowchart LR
   GW -->|"Contract C SSE"| REACT
 ```
 
-Styles inside the shadow tree do not leak to the host; host CSS does not pierce the widget (except inherited properties on `:host` are reset via `all: initial`).
+Styles inside the shadow tree do not leak to the host; host CSS does not pierce the widget (except inherited properties on `:host`, which are reset via `all: initial`).
 
 ---
 
 ## Tech Stack
 
-| Package        | Version |
-|----------------|---------|
-| React          | 19.0.0  |
-| React DOM      | 19.0.0  |
-| Vite           | 6.x     |
-| TypeScript     | 5.7+    |
-| Tailwind CSS   | 3.4+    |
-| Zustand        | 5.x     |
-| Lucide React   | icons   |
+| Package | Version |
+|---------|---------|
+| React | 19.0.0 |
+| React DOM | 19.0.0 |
+| Vite | 6.x |
+| TypeScript | 5.7+ |
+| Tailwind CSS | 3.4+ |
+| Zustand | 5.x |
+| Lucide React | latest |
 
 ---
 
@@ -45,26 +45,30 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 
 **Tag name:** `compliance-chat-overlay`
 
-**Registration:** `src/mount.tsx` — `customElements.define('compliance-chat-overlay', ...)`
+**Registration:** `src/mount.tsx` calls `customElements.define('compliance-chat-overlay', ...)`.
 
 ### HTML Attributes
 
-| Attribute     | Type                        | Required | Description                                                                 |
-|---------------|-----------------------------|----------|-----------------------------------------------------------------------------|
-| `user-role`   | `"user"` \| `"reviewer"`   | **Yes**  | Role injected by the host. Controls AI routing and message styling. Never toggled from within the widget. |
-| `user-id`     | string                      | **Yes**  | Unique identifier for the authenticated user (e.g. `"usr_abc123"`). Sent with every request via the Zustand store and shown in the sidebar identity badge. |
-| `gateway-url` | URL string                  | No       | Override the Contract A endpoint (default: `http://localhost:3000/api/chat`). |
-| `open`        | `"true"` \| _(any)_        | No       | If `"true"`, the chat panel opens immediately on mount.                    |
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `user-role` | `"user"` \| `"reviewer"` | **Yes** | Role set by the host application. Controls AI semantic routing and message bubble styling. **Read-only** from inside the widget — never toggled by UI interactions. |
+| `user-id` | `string` | **Yes** | Unique identifier for the authenticated user (e.g. `"usr_abc123"`). Sent as `userId` in every Contract A request, stored in the Zustand store, and shown in the sidebar identity badge. |
+| `gateway-url` | URL string | No | Override the Contract A endpoint. Default: `http://localhost:3000/api/chat` |
+| `open` | `"true"` | No | If present and `"true"`, the chat panel opens immediately on mount. |
 
-> **Important:** `user-role` and `user-id` are **read-only from the widget's perspective**. They are set by the host application and cannot be changed from inside the widget UI. Changing them via `setAttribute()` after mount is fully supported — `attributeChangedCallback` propagates the new value into the Zustand store automatically.
+> **Important:** `user-role` and `user-id` are set by the **host application** and cannot be changed from inside the widget UI. Changing them via `setAttribute()` after mount is fully supported — `attributeChangedCallback` in `mount.tsx` propagates the new values into the Zustand store automatically.
 
-### Embedding — Quick Start
+---
+
+## Embedding Guide
+
+### Reviewer Role (most common in compliance apps)
 
 ```html
 <!-- 1. Load the widget bundle -->
 <script type="module" src="https://cdn.example.com/compliance-chat-overlay.es.js"></script>
 
-<!-- 2. Place the element with the required attributes -->
+<!-- 2. Mount the element -->
 <compliance-chat-overlay
   gateway-url="https://api.example.com/api/chat"
   user-role="reviewer"
@@ -72,7 +76,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 ></compliance-chat-overlay>
 ```
 
-### Embedding — User Role
+### Standard User Role
 
 ```html
 <compliance-chat-overlay
@@ -82,7 +86,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 ></compliance-chat-overlay>
 ```
 
-### Embedding — Open on Load
+### Open Panel on Page Load
 
 ```html
 <compliance-chat-overlay
@@ -93,7 +97,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 ></compliance-chat-overlay>
 ```
 
-### Dynamic Attribute Update (JavaScript)
+### Dynamic Attribute Updates (JavaScript)
 
 ```javascript
 const widget = document.querySelector('compliance-chat-overlay');
@@ -102,165 +106,190 @@ const widget = document.querySelector('compliance-chat-overlay');
 widget.setAttribute('user-id', 'usr_newuser');
 widget.setAttribute('user-role', 'user');
 
-// Programmatically open/close
+// Programmatically open or close
 widget.setAttribute('open', 'true');
 ```
 
-### Build Output
+### Build Output Files
 
-| File                                  | Use case                         |
-|---------------------------------------|----------------------------------|
-| `dist/compliance-chat-overlay.es.js`  | ES module — modern bundlers/CDN  |
-| `dist/compliance-chat-overlay.iife.js`| IIFE — plain `<script>` tag      |
+| File | Use case |
+|------|----------|
+| `dist/compliance-chat-overlay.es.js` | ES module — modern bundlers, CDN `<script type="module">` |
+| `dist/compliance-chat-overlay.iife.js` | IIFE — plain `<script>` tag, no bundler required |
 
 ---
 
 ## UI Features
 
-- **Floating launcher button** (bottom-right) — hidden when `open="true"`.
-- **Read-only role badge** in the header — shows the role from the `user-role` attribute; no manual toggle.
-- **Chat History sidebar** — collapsible drawer listing past sessions with titles and dates.
-- **New Chat button** — in the sidebar and as a header shortcut; archives the current session.
-- **Session switching** — clicking a past session sets it as active (API hydration hook-ready).
-- **Identity badge** — sidebar footer shows `user-id` and `user-role`.
-- **Streaming message feed** — animated cursor while assistant is composing.
-- **Error banner** — shown on gateway/network failures.
-- **Input disabled during streaming** — prevents double-sends.
+- **Floating launcher button** (bottom-right corner) — hidden when the panel is open.
+- **Read-only role badge** in the panel header — shows the `user-role` attribute value; no manual toggle in the UI.
+- **Chat History sidebar** — collapsible drawer listing past sessions with auto-generated titles and dates.
+- **New Chat button** — available in the sidebar header and as a shortcut in the main header; archives the current session before creating a fresh one.
+- **Session switching** — clicking a past session in the sidebar sets it as active and clears the message list (API hydration hook-ready).
+- **Identity badge** — sidebar footer displays the current `user-id` and `user-role`.
+- **Streaming message feed** — animated blinking cursor while the assistant is composing a reply.
+- **Error banner** — displayed on gateway or network failures with the error message.
+- **Input locked during streaming** — the send button and input field are disabled while an SSE stream is active, preventing double-sends.
 
 ---
 
 ## State Architecture — Zustand (`src/store/useChatStore.ts`)
 
+The entire widget state lives in a single flat Zustand store. There is no React Context, no prop drilling, and no external state management dependency beyond Zustand itself.
+
 ### Identity (set from HTML attributes)
 
-| Field      | Type                       | Set by            | Description                                 |
-|------------|----------------------------|-------------------|---------------------------------------------|
-| `userId`   | `string`                   | `initUser()`      | Mirrors the `user-id` HTML attribute        |
-| `userRole` | `"user"` \| `"reviewer"`  | `initUser()`      | Mirrors the `user-role` HTML attribute      |
+| Field | Type | Set by | Description |
+|-------|------|--------|-------------|
+| `userId` | `string` | `initUser()` | Mirrors the `user-id` HTML attribute |
+| `userRole` | `"user"` \| `"reviewer"` | `initUser()` | Mirrors the `user-role` HTML attribute |
 
 ### Widget Visibility
 
-| Field    | Type      | Description              |
-|----------|-----------|--------------------------|
-| `isOpen` | `boolean` | Controls panel visibility |
+| Field | Type | Description |
+|-------|------|-------------|
+| `isOpen` | `boolean` | Controls panel visibility — toggled by the launcher button |
 
 ### Active Conversation
 
-| Field             | Type            | Description                                      |
-|-------------------|-----------------|--------------------------------------------------|
-| `activeSessionId` | `string`        | Current session ID (sent in Contract A request) |
-| `messages`        | `ChatMessage[]` | Messages for the active session                 |
-| `isStreaming`     | `boolean`       | Lock during SSE                                  |
-| `error`           | `string\|null`  | Last client error                                |
-| `gatewayUrl`      | `string`        | Contract A endpoint                              |
+| Field | Type | Description |
+|-------|------|-------------|
+| `activeSessionId` | `string` | Current session ID sent as `sessionId` in Contract A requests |
+| `messages` | `ChatMessage[]` | All messages for the active session, in order |
+| `isStreaming` | `boolean` | Lock flag — `true` while an SSE stream is active |
+| `error` | `string \| null` | Last client-side error message; `null` when clear |
+| `gatewayUrl` | `string` | The Contract A endpoint (from `gateway-url` attribute) |
 
 ### Session History (sidebar)
 
-| Field           | Type            | Description                                                          |
-|-----------------|-----------------|----------------------------------------------------------------------|
-| `sessions`      | `ChatSession[]` | Ordered list of past sessions (newest first)                         |
-| `isSidebarOpen` | `boolean`       | Controls the history drawer                                          |
-| `activeSessionId` | `string`      | ID of the currently selected session                                 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `sessions` | `ChatSession[]` | Past sessions, newest first |
+| `isSidebarOpen` | `boolean` | Controls the history drawer visibility |
 
-#### `ChatSession` shape
+#### `ChatSession` type
 
 ```typescript
 type ChatSession = {
   id: string;    // "sess_<timestamp>_<random>"
-  title: string; // Derived from the first user message (up to 48 chars)
-  date: string;  // ISO date, e.g. "2026-06-03"
+  title: string; // First 48 chars of the first user message
+  date: string;  // ISO date string, e.g. "2026-06-03"
 };
 ```
 
-### Actions
+#### `ChatMessage` type
 
-| Action                   | Description                                                                                               |
-|--------------------------|-----------------------------------------------------------------------------------------------------------|
-| `initUser(id, role)`     | Called by `mount.tsx` after reading `user-id` and `user-role` attributes. Seeds `userId` + `userRole`.  |
-| `setGatewayUrl(url)`     | Updates the Contract A endpoint.                                                                          |
-| `toggleOpen()`           | Toggles the chat panel.                                                                                   |
-| `setOpen(bool)`          | Explicitly open or close the panel.                                                                       |
-| `toggleSidebar()`        | Toggles the history sidebar.                                                                              |
-| `setSidebarOpen(bool)`   | Explicitly open or close the sidebar.                                                                     |
-| `newSession()`           | Archives the current session into `sessions[]` (using the first user message as title), then creates a fresh `activeSessionId` and clears `messages`. |
-| `setActiveSession(id)`   | Sets `activeSessionId` and clears `messages` (future API integration should load messages here).         |
-| `addUserMessage(text)`   | Appends a user message; role is taken from `userRole` in the store.                                      |
-| `startAssistantMessage()`| Appends an empty streaming assistant message.                                                             |
-| `appendStreamToken(tok)` | Appends a token to the last assistant message.                                                            |
-| `finishStream()`         | Marks all streaming messages as done; clears `isStreaming`.                                               |
-| `setError(msg)`          | Stores an error string (or clears with `null`).                                                           |
-| `setStreaming(bool)`     | Manually sets the streaming lock.                                                                         |
+```typescript
+type ChatMessage = {
+  id: string;
+  role: "user" | "reviewer" | "assistant";
+  content: string;
+  isStreaming?: boolean; // true while SSE tokens are still arriving
+};
+```
+
+### Store Actions
+
+| Action | Signature | Description |
+|--------|-----------|-------------|
+| `initUser` | `(id, role) => void` | Called once by `mount.tsx` after reading HTML attributes. Seeds `userId` and `userRole`. |
+| `setGatewayUrl` | `(url) => void` | Updates the Contract A endpoint from the `gateway-url` attribute. |
+| `toggleOpen` | `() => void` | Toggles panel visibility. |
+| `setOpen` | `(bool) => void` | Explicitly open or close the panel. |
+| `toggleSidebar` | `() => void` | Toggles the history sidebar drawer. |
+| `setSidebarOpen` | `(bool) => void` | Explicitly open or close the sidebar. |
+| `newSession` | `() => void` | Archives the current session into `sessions[]` (title = first user message, up to 48 chars), then creates a fresh `activeSessionId` and clears `messages`. |
+| `setActiveSession` | `(sessionId) => void` | Sets `activeSessionId` and clears `messages`. This is the API integration point — add a `GET /api/chat/history/:sessionId` fetch here to hydrate messages. |
+| `addUserMessage` | `(content) => string` | Appends a `{ role: userRole, content }` message; returns the generated ID. |
+| `startAssistantMessage` | `() => string` | Appends an empty streaming assistant message; returns its ID. |
+| `appendStreamToken` | `(token) => void` | Appends a token string to the last assistant message's `content`. |
+| `finishStream` | `() => void` | Sets `isStreaming: false` on all messages; releases the streaming lock. |
+| `setError` | `(msg \| null) => void` | Sets or clears the error banner. |
+| `setStreaming` | `(bool) => void` | Manually controls the streaming lock. |
+| `clearMessages` | `() => void` | Clears messages and generates a new session ID (used in dev). |
 
 ### Session History Flow
 
 ```
-User sends first message
+User clicks "New Chat" (or + icon)
         │
         ▼
-newSession() triggered (+ icon or sidebar button)
+newSession() is called
         │
         ├─ messages.length > 0?
-        │    YES → derive title from first user message
-        │         → prepend ChatSession to sessions[]
-        │    NO  → skip archiving (empty session)
+        │    YES → title = first user message (≤ 48 chars + "…" if longer)
+        │         → archived ChatSession prepended to sessions[]
+        │    NO  → nothing archived (don't create empty session records)
         │
-        └─ reset: activeSessionId = new ID, messages = [], close sidebar
-```
+        └─ reset:
+             activeSessionId = new generateSessionId()
+             messages = []
+             isSidebarOpen = false
 
-When the user **clicks a past session** in the sidebar:
-
-```
+User clicks a past session in the sidebar
+        │
+        ▼
 setActiveSession(id)
-  → activeSessionId = id
-  → messages = []          ← cleared; API integration point
-  → isSidebarOpen = false
+        → activeSessionId = id
+        → messages = []          ← cleared (API integration point)
+        → isSidebarOpen = false
 ```
 
-**To hydrate messages for a past session**, subscribe to `activeSessionId` changes and fetch from your API, then call the appropriate store actions (or extend the store with a `setMessages` action).
+To hydrate messages for a past session from the gateway:
+
+```typescript
+// In your integration layer — call the gateway history endpoint
+const res = await fetch(`http://localhost:3000/api/chat/history/${sessionId}`);
+const { messages } = await res.json();
+// Then populate the store with the returned messages
+```
 
 ---
 
-## Hook — `src/hooks/useChatStream.ts`
+## SSE Stream Hook — `src/hooks/useChatStream.ts`
 
-1. Reads `activeSessionId`, `userRole`, and `gatewayUrl` from the store.
-2. POSTs to `gatewayUrl` (Contract A) with `{ sessionId, role, message }`.
-3. Streams the response body with `getReader()` + `TextDecoder`.
-4. Parses `data:` lines (Contract C SSE).
-5. On `type: "token"` → `appendStreamToken(content)`.
-6. On `type: "done"` → `finishStream()`.
-7. On `type: "error"` → throws, caught by error handler → `setError()`.
+The `useChatStream` hook handles the full Contract A → Contract C lifecycle:
+
+1. Reads `activeSessionId`, `userId`, `userRole`, and `gatewayUrl` from the Zustand store.
+2. POSTs to `gatewayUrl` with the Contract A body: `{ sessionId, userId, role, message }`.
+3. Reads the streaming response body with `response.body.getReader()` + `TextDecoder`.
+4. Splits the decoded text on newlines and parses each `data: {...}` line.
+5. On `type: "token"` → calls `appendStreamToken(content)`.
+6. On `type: "done"` → calls `finishStream()`.
+7. On `type: "error"` → calls `setError(content)`.
+8. Network/fetch errors are caught and forwarded to `setError()`.
 
 ---
 
-## Contracts
-
-### Contract A — outbound POST
+## Contract A — Outbound Request Shape
 
 ```http
-POST <gateway-url>
+POST http://localhost:3000/api/chat
 Content-Type: application/json
 Accept: text/event-stream
 
 {
   "sessionId": "sess_1748956800_abc123",
+  "userId": "usr_abc123",
   "role": "reviewer",
   "message": "Check Q2 compliance status."
 }
 ```
 
-`role` comes directly from `userRole` in the store (injected via `user-role` attribute).
+`userId` comes from `useChatStore.userId` (set from `user-id` attribute).
+`role` comes from `useChatStore.userRole` (set from `user-role` attribute).
 
-### Contract C — inbound SSE
+## Contract C — Inbound SSE Shape
 
-```text
-data: {"type": "token", "content": "The "}
-data: {"type": "token", "content": "status is..."}
+```
+data: {"type": "token", "content": "The Q2 "}
+data: {"type": "token", "content": "status is fully compliant."}
 data: {"type": "done"}
 ```
 
 Error event:
 
-```text
+```
 data: {"type": "error", "content": "AI service unavailable"}
 ```
 
@@ -270,20 +299,34 @@ data: {"type": "error", "content": "AI service unavailable"}
 
 ```
 widget-client/
-├── index.html                  # Dev host page (uses new tag + all attributes)
-├── vite.config.ts              # Dev server + lib build
-├── tailwind.config.js          # ABB color tokens
+├── index.html                  # Dev host page (mounts widget with all attributes)
+├── vite.config.ts              # Dev server config + lib build output
+├── tailwind.config.js          # ABB brand color tokens
 ├── postcss.config.js
 └── src/
-    ├── mount.tsx               # Web Component — reads attrs, calls initUser()
-    ├── index.css               # Tailwind + :host { all: initial }
+    ├── mount.tsx               # Web Component class — reads attributes, calls initUser()
+    ├── index.css               # Tailwind directives + :host { all: initial }
     ├── store/
-    │   └── useChatStore.ts     # Zustand — identity, sessions, messages
+    │   └── useChatStore.ts     # Zustand store — identity, sessions, messages, actions
     ├── hooks/
-    │   └── useChatStream.ts    # SSE fetch + stream parsing
+    │   └── useChatStream.ts    # Contract A POST + Contract C SSE parsing
     └── components/
-        └── ChatWidget.tsx      # Panel, sidebar, message feed, input bar
+        └── ChatWidget.tsx      # Full panel UI: sidebar, message feed, input bar
 ```
+
+---
+
+## Shadow DOM and Styling
+
+`mount.tsx` setup sequence:
+
+1. `this.attachShadow({ mode: 'open' })` — creates an isolated DOM tree.
+2. Injects a `<style>` element with compiled Tailwind CSS via `import tailwindStyles from './index.css?inline'`.
+3. Mounts `<ChatWidget />` with `createRoot()` into the shadow root.
+
+`:host { all: initial; }` in `index.css` resets all inherited host typography and layout properties to prevent visual bleed.
+
+The sidebar drawer uses `absolute` positioning within the `overflow-hidden` panel container, so it never escapes the shadow boundary.
 
 ---
 
@@ -292,8 +335,8 @@ widget-client/
 ### Prerequisites
 
 - Node.js 20+
-- Gateway running on port **3000**
-- AI service on port **8000** (via gateway)
+- `gateway-service` running on port **3000**
+- `ai-service` running on port **8000** (accessed via gateway)
 
 ### Dev Server
 
@@ -303,7 +346,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The dev host page (`index.html`) mounts the widget with:
+Open [http://localhost:5173](http://localhost:5173). The dev `index.html` mounts the widget with:
 
 ```html
 <compliance-chat-overlay
@@ -321,9 +364,9 @@ To test the **user** role, edit `index.html` and change `user-role="user"`.
 npm run build
 ```
 
-Output in `dist/`. Serve the IIFE or ES build from your CDN or static host.
+Output files are in `dist/`. Serve the IIFE or ES module build from your CDN or static host.
 
-### Preview Production Build
+### Preview the Production Build
 
 ```powershell
 npm run preview
@@ -331,52 +374,39 @@ npm run preview
 
 ---
 
-## Shadow DOM and Styling
+## Customisation
 
-`mount.tsx` setup:
+**Safe to change without breaking contracts:**
 
-1. `attachShadow({ mode: 'open' })` — creates an isolated tree.
-2. Injects `<style>` containing compiled Tailwind via `import tailwindStyles from './index.css?inline'`.
-3. Mounts `<ChatWidget />` via `createRoot()`.
-
-`:host { all: initial; }` in `index.css` resets inherited host typography to prevent bleed.
-
-The sidebar drawer uses `absolute` positioning within the `overflow-hidden` panel container — it never escapes the shadow boundary.
-
----
-
-## Customization
-
-Safe to change without breaking contracts:
-
-- Colors in `tailwind.config.js` (`abb.primary`, `abb.dark`, `abb.surface`)
+- Color tokens in `tailwind.config.js` (`abb.primary`, `abb.dark`, `abb.surface`)
 - Panel dimensions (`h-[560px] w-[400px]`) in `ChatWidget.tsx`
 - Sidebar width (`w-64`) in `ChatWidget.tsx`
-- Mock seed sessions in `buildMockSessions()` inside `useChatStore.ts`
+- Sidebar mock seed data in `buildMockSessions()` inside `useChatStore.ts`
 
-**Do not change** without coordinating with gateway + AI:
+**Do not change without coordinating with gateway and AI service:**
 
-- POST body field names (`sessionId`, `role`, `message`) — Contract A
-- SSE `type` / `content` field names — Contract C
+- POST body field names (`sessionId`, `userId`, `role`, `message`) — Contract A
+- SSE event field names (`type`, `content`) — Contract C
 
 ---
 
 ## Troubleshooting
 
-| Issue                           | Check                                                         |
-|---------------------------------|---------------------------------------------------------------|
-| `user-role` not applied         | Ensure attribute is set **before** the element connects, or rely on `attributeChangedCallback` |
-| Role shows `"user"` unexpectedly | Verify `user-role="reviewer"` is spelled correctly (kebab-case) |
-| CORS error                      | Gateway running; `gateway-url` correct                        |
-| Stream never ends               | AI service returning `done` event                             |
-| Styles look unstyled            | Build must inline CSS; verify shadow mount path               |
-| 502 from fetch                  | Start AI + gateway before the widget                          |
-| Sidebar not visible             | Check `overflow-hidden` on the panel container (intentional)  |
+| Issue | Check |
+|-------|-------|
+| `user-role` not applied | Ensure attribute is set before element connects, or rely on `attributeChangedCallback` |
+| Role shows `"user"` unexpectedly | Verify `user-role="reviewer"` is kebab-case |
+| CORS error in console | Gateway is running and `gateway-url` attribute is correct |
+| Stream never ends | AI service must emit a `{"type":"done"}` event to signal completion |
+| Styles look unstyled | Build must inline CSS; verify `?inline` import in `mount.tsx` |
+| 502 from fetch | Start AI service and gateway before the widget |
+| Sidebar not visible | Intentional — `overflow-hidden` on the panel container clips the drawer |
+| `userId` missing in gateway payload | Verify `user-id` attribute is set on the element |
 
 ---
 
 ## Related Documentation
 
-- [Root README](../README.md) — architecture and full contract reference
-- [gateway-service/README.md](../gateway-service/README.md) — `/api/chat` API
-- [ai-service/README.md](../ai-service/README.md) — routing behind the gateway
+- [Root README](../README.md) — architecture, contracts, Master Boot Sequence
+- [gateway-service/README.md](../gateway-service/README.md) — `/api/chat` and history API
+- [ai-service/README.md](../ai-service/README.md) — semantic routing behind the gateway

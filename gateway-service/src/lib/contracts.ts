@@ -2,6 +2,7 @@
 
 export type WidgetChatRequest = {
   sessionId: string;
+  userId: string;
   role: "user" | "reviewer";
   message: string;
 };
