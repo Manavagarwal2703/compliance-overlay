@@ -63,6 +63,12 @@ type ChatState = {
   /** Switch the active session (UI only — messages are not loaded here). */
   setActiveSession: (sessionId: string) => void;
 
+  /** Fetch message history for a session and replace the active messages. */
+  loadSession: (sessionId: string) => Promise<void>;
+
+  /** Fetch the list of sessions for a user and populate the sidebar. */
+  loadSessions: (userId: string) => Promise<void>;
+
   addUserMessage: (content: string) => string;
   startAssistantMessage: () => string;
   appendStreamToken: (token: string) => void;
@@ -88,34 +94,6 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Seed with a handful of realistic-looking mock sessions for the sidebar. */
-function buildMockSessions(): ChatSession[] {
-  const now = Date.now();
-  const day = 86_400_000;
-  return [
-    {
-      id: generateSessionId(),
-      title: "Q2 Audit Compliance Check",
-      date: new Date(now - day).toISOString().slice(0, 10),
-    },
-    {
-      id: generateSessionId(),
-      title: "GDPR Data Retention Policy",
-      date: new Date(now - 2 * day).toISOString().slice(0, 10),
-    },
-    {
-      id: generateSessionId(),
-      title: "Vendor Risk Assessment — Acme Corp",
-      date: new Date(now - 5 * day).toISOString().slice(0, 10),
-    },
-    {
-      id: generateSessionId(),
-      title: "ISO 27001 Gap Analysis",
-      date: new Date(now - 8 * day).toISOString().slice(0, 10),
-    },
-  ];
-}
-
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -137,7 +115,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   error: null,
 
   // ── Session history ───────────────────────────────────────────────────────
-  sessions: buildMockSessions(),
+  sessions: [],
   isSidebarOpen: false,
 
   // ── Gateway ───────────────────────────────────────────────────────────────
@@ -197,6 +175,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
       error: null,
       isSidebarOpen: false,
     });
+  },
+
+  loadSession: async (sessionId) => {
+    set({ activeSessionId: sessionId, messages: [], error: null, isSidebarOpen: false });
+    try {
+      const res = await fetch(
+        `http://localhost:3000/api/chat/history/${sessionId}`
+      );
+      if (!res.ok) throw new Error(`History fetch failed: ${res.status}`);
+      // API returns { sessionId, messages: [...] } — destructure the envelope
+      const data: { sessionId: string; messages: Array<{ id: string; role: string; content: string; createdAt: string }> } =
+        await res.json();
+      const messages: ChatMessage[] = (data.messages ?? []).map((m) => ({
+        id: m.id,
+        role: m.role as ChatMessage["role"],
+        content: m.content,
+      }));
+      set({ messages });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to load session";
+      set({ error: msg });
+    }
+  },
+
+  loadSessions: async (userId) => {
+    if (!userId) return;
+    try {
+      const res = await fetch(
+        `http://localhost:3000/api/chat/history?userId=${encodeURIComponent(userId)}`
+      );
+      if (!res.ok) return; // silently ignore — sidebar will just stay empty
+      // API returns { sessions: [...] }
+      const data: { sessions: Array<{ id: string; title: string; updatedAt: string }> } =
+        await res.json();
+      const sessions: ChatSession[] = (data.sessions ?? []).map((s) => ({
+        id: s.id,
+        title: s.title,
+        date: s.updatedAt.slice(0, 10),
+      }));
+      set({ sessions });
+    } catch {
+      // Non-fatal: sidebar just shows no history
+    }
   },
 
   addUserMessage: (content) => {

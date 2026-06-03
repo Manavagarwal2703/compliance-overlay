@@ -37,10 +37,18 @@ function ChatSidebar() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const isSidebarOpen = useChatStore((s) => s.isSidebarOpen);
   const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
-  const setActiveSession = useChatStore((s) => s.setActiveSession);
+  const loadSession = useChatStore((s) => s.loadSession);
+  const loadSessions = useChatStore((s) => s.loadSessions);
   const newSession = useChatStore((s) => s.newSession);
   const userRole = useChatStore((s) => s.userRole);
   const userId = useChatStore((s) => s.userId);
+
+  // Fetch real sessions from the DB whenever the sidebar opens
+  useEffect(() => {
+    if (isSidebarOpen) {
+      void loadSessions(userId);
+    }
+  }, [isSidebarOpen, userId, loadSessions]);
 
   return (
     <>
@@ -121,7 +129,7 @@ function ChatSidebar() {
                   <li key={session.id}>
                     <button
                       type="button"
-                      onClick={() => setActiveSession(session.id)}
+                      onClick={() => loadSession(session.id)}
                       className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left transition ${
                         isActive
                           ? "bg-white/15 text-white"
