@@ -23,8 +23,8 @@ function parseSseLine(line: string): SsePayload | null {
 }
 
 export function useChatStream() {
-  const sessionId = useChatStore((s) => s.sessionId);
-  const activeRole = useChatStore((s) => s.activeRole);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const userRole = useChatStore((s) => s.userRole);
   const gatewayUrl = useChatStore((s) => s.gatewayUrl);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const addUserMessage = useChatStore((s) => s.addUserMessage);
@@ -54,8 +54,8 @@ export function useChatStream() {
             Accept: "text/event-stream",
           },
           body: JSON.stringify({
-            sessionId,
-            role: activeRole,
+            sessionId: activeSessionId,
+            role: userRole,
             message: trimmed,
           }),
         });
@@ -115,8 +115,8 @@ export function useChatStream() {
       }
     },
     [
-      sessionId,
-      activeRole,
+      activeSessionId,
+      userRole,
       gatewayUrl,
       isStreaming,
       addUserMessage,

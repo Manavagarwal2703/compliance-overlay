@@ -11,9 +11,11 @@
         Host Application (styles outside widget are isolated)
       </h1>
     </div>
-    <compliance-chat-widget
+    <compliance-chat-overlay
       gateway-url="http://localhost:3000/api/chat"
-    ></compliance-chat-widget>
+      user-role="reviewer"
+      user-id="dev_user_001"
+    ></compliance-chat-overlay>
     <script type="module" src="/src/mount.tsx"></script>
   </body>
 </html>
