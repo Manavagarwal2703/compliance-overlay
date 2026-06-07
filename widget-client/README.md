@@ -158,7 +158,18 @@ widget.setAttribute('open', 'true');
 - **New Chat button** — available in the sidebar header and as a shortcut in the main header; archives the current session before creating a fresh one.
 - **Session switching** — clicking a past session in the sidebar loads its message history from the gateway API.
 - **Identity badge** — sidebar displays the user's display name extracted from the JWT (see below), falling back to **"You"** when no name is available.
-- **Empty state action cards** — when `messages.length === 0`, three clickable sleek "Action Cards" appear in the chat area: *"What is our cybersecurity policy?"*, *"Check Q2 Compliance."*, and *"Why did control AC-2 fail?"*. Clicking an action card immediately sends that message.
+- **Empty state action cards** — when `messages.length === 0`, three elegant, compact pill-shaped Action Cards stagger in via Framer Motion. Clicking an action card immediately sends that message.
+- **Auto-expanding professional input** — the input box is a `<textarea>` that automatically grows from 1 line to up to 150px as you type. It features a subtle red focus glow and supports multi-line entry via `Shift + Enter`.
+- **Message timestamps** — every chat bubble now includes a tiny, muted timestamp at the bottom corner for precise chat history tracking.
+- **Clipboard actions** — assistant messages feature a tiny "Copy" button that saves the plain text content directly to the user's clipboard, briefly turning green to read "Copied!".
+- **Intelligent scroll-to-bottom logic** — powered by `useLayoutEffect` which fires synchronously after each DOM paint, ensuring `scrollHeight` is always current. Four distinct triggers guarantee the user never loses the AI response:
+  1. **Streaming**: every token appended to the feed instantly snaps the view to the bottom (`behavior: 'auto'` prevents jitter).
+  2. **Message landed**: once a complete message is rendered (streaming finished), a smooth scroll (`behavior: 'smooth'`) anchors the view.
+  3. **History load**: selecting a past session from the sidebar triggers an immediate `scrollTo` on the next animation frame so the most-recent messages are shown, not the start of the conversation.
+  4. **Send**: pressing Enter or clicking "Send" calls `requestAnimationFrame(scrollToBottomInstant)` before the stream is awaited, so the user's own message and the "Thinking" skeleton are always visible.
+  A floating chevron button slides in when the user manually scrolls more than 200px above the bottom, allowing one-click smooth scrolling back to the newest message.
+- **Textarea scrollbar hidden** — the auto-expanding `<textarea>` carries the `no-scrollbar` CSS utility class, suppressing the visual red scrollbar (`scrollbar-width: none` for Firefox; `::-webkit-scrollbar { display: none }` for Chrome/Safari/Edge). The element still expands up to 150px and supports internal overflow scrolling — only the visual bar is removed. The bespoke red custom scrollbar is **preserved** on the chat message feed and the sidebar session list.
+- **Ultra-thin bespoke scrollbars** — custom webkit CSS scrollbars styled as ultra-thin (5px) semi-transparent Corporate Red pills. Icon buttons on the header now sport sleek, dark tooltips that fade in after a 500ms delay.
 - **Streaming message feed** — animated blinking cursor while the assistant is composing a reply.
 - **Error banner** — displayed on gateway or network failures with a human-readable message. Auth errors (`401 Unauthorized`) show *"Authentication failed. Please check your session."* instead of raw JSON.
 - **Input locked during streaming** — the send button and input field are disabled while an SSE stream is active, preventing double-sends.

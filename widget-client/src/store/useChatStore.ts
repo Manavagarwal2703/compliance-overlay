@@ -14,6 +14,7 @@ export type ChatMessage = {
   isStreaming?: boolean;
   /** RAG citation filenames attached via the Contract C `sources` SSE event. */
   sources?: string[];
+  timestamp?: string;
 };
 
 /**
@@ -292,11 +293,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           createdAt: string;
         }>;
       } = await res.json();
-      const messages: ChatMessage[] = (data.messages ?? []).map((m) => ({
-        id: m.id,
-        role: m.role as ChatMessage["role"],
-        content: m.content,
-      }));
+      const messages: ChatMessage[] = (data.messages ?? []).map((m) => {
+        const d = new Date(m.createdAt);
+        const timeStr = isNaN(d.getTime()) ? "12:00 PM" : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return {
+          id: m.id,
+          role: m.role as ChatMessage["role"],
+          content: m.content,
+          timestamp: timeStr,
+        };
+      });
       set({ messages });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load session";
@@ -418,10 +424,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   addUserMessage: (content) => {
     const id = generateId();
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     set((s) => ({
       messages: [
         ...s.messages,
-        { id, role: s.userRole, content },
+        { id, role: s.userRole, content, timestamp },
       ],
       sessions: upsertSessionOnMessage(s.sessions, s.activeSessionId, content),
     }));
@@ -430,10 +437,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   startAssistantMessage: () => {
     const id = generateId();
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     set((s) => ({
       messages: [
         ...s.messages,
-        { id, role: "assistant", content: "", isStreaming: true },
+        { id, role: "assistant", content: "", isStreaming: true, timestamp },
       ],
     }));
     return id;

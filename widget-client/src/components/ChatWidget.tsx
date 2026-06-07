@@ -1,4 +1,4 @@
-import { FormEvent, useRef, useEffect, useState, KeyboardEvent } from "react";
+import { FormEvent, useRef, useEffect, useLayoutEffect, useState, KeyboardEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   MessageSquare,
@@ -14,6 +14,8 @@ import {
   BookOpen,
   Pencil,
   Check,
+  Copy,
+  ChevronDown,
 } from "lucide-react";
 import {
   useChatStore,
@@ -448,26 +450,112 @@ export function ChatWidget() {
 
   const [input, setInput] = useState("");
   const feedRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+  // ── Sentinel: track which session is currently loaded ──────────────────────
+  // Changes whenever a new session is loaded, triggering an immediate scroll.
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const sessionKeyRef = useRef<string>(activeSessionId);
 
   // Dual health check (DB + AI) once on mount
   useEffect(() => {
     void initializeSystem();
   }, [initializeSystem]);
 
-  // Auto-scroll to newest message
-  useEffect(() => {
-    if (feedRef.current) {
-      feedRef.current.scrollTop = feedRef.current.scrollHeight;
-    }
-  }, [messages]);
+  // ── Reliable scroll-to-bottom helper ────────────────────────────────────────
+  const scrollToBottomInstant = () => {
+    const el = feedRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+  };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!chatEnabled) return;
+  const scrollToBottom = () => {
+    feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: "smooth" });
+  };
+
+  // ── Task 2 & 5: Auto-scroll during streaming ────────────────────────────────
+  // useLayoutEffect fires synchronously after DOM paint so scrollHeight is
+  // already updated when we read it — avoids the one-frame lag of useEffect.
+  // We always scroll to bottom during streaming and on every new message.
+  // The old 50px threshold guard has been removed so the user never misses a
+  // response token.
+  useLayoutEffect(() => {
+    const el = feedRef.current;
+    if (!el) return;
+
+    if (isStreaming) {
+      // During active stream: instant tracking — no 'smooth' to prevent jitter
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+    } else if (messages.length > 0) {
+      // After stream finishes or a new message lands: smooth scroll
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
+  }, [messages, isStreaming]);
+
+  // ── Task 3: Scroll to bottom on history load ────────────────────────────────
+  // When the active session changes (user clicks a past session), messages are
+  // async-fetched. We watch for the session ID change and immediately scroll
+  // after the next paint so the most-recent messages are in view.
+  useLayoutEffect(() => {
+    if (activeSessionId !== sessionKeyRef.current) {
+      sessionKeyRef.current = activeSessionId;
+      // Instant scroll after session switch; messages may still be loading
+      // but once they arrive the streaming effect above will scroll again.
+      scrollToBottomInstant();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId]);
+
+  // Auto-expand textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+    }
+  }, [input]);
+
+  const handleScroll = () => {
+    if (!feedRef.current) return;
+    const { scrollHeight, scrollTop, clientHeight } = feedRef.current;
+    setShowJumpToBottom(scrollHeight - scrollTop - clientHeight > 200);
+  };
+
+  // ── Task 4: Submission auto-scroll ──────────────────────────────────────────
+  // Immediately snap to bottom so the user sees their own message and the
+  // "Thinking" skeleton before the stream begins.
+  const submitMessage = async () => {
+    if (!chatEnabled || isStreaming) return;
     const text = input.trim();
     if (!text) return;
     setInput("");
+    // Scroll before awaiting the stream so the user's message is visible
+    // on the very next frame.
+    requestAnimationFrame(scrollToBottomInstant);
     await sendMessage(text);
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    await submitMessage();
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submitMessage();
+    }
+  };
+
+  const handleCopy = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageId(id);
+      setTimeout(() => setCopiedMessageId(null), 2000);
+    } catch (err) {
+      console.error("Failed to copy text: ", err);
+    }
   };
 
   const handleSuggestionClick = async (text: string) => {
@@ -515,14 +603,19 @@ export function ChatWidget() {
           <header className="relative z-0 flex items-center justify-between bg-slate-900/90 backdrop-blur-md px-4 py-3 text-white border-b border-white/10">
             <div className="flex items-center gap-2">
               {/* History toggle */}
-              <button
-                type="button"
-                onClick={toggleSidebar}
-                className="rounded p-1 text-white/80 hover:bg-white/10 hover:text-white focus:outline-none transition-colors"
-                aria-label="Toggle chat history"
-              >
-                <PanelLeft className="h-5 w-5" strokeWidth={2.5} />
-              </button>
+              <div className="group relative flex">
+                <button
+                  type="button"
+                  onClick={toggleSidebar}
+                  className="rounded p-1 text-white/80 hover:bg-white/10 hover:text-white focus:outline-none transition-colors"
+                  aria-label="Toggle chat history"
+                >
+                  <PanelLeft className="h-5 w-5" strokeWidth={2.5} />
+                </button>
+                <span className="pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity delay-500 group-hover:opacity-100 shadow-md border border-white/10">
+                  History
+                </span>
+              </div>
 
               <CustomShield className="h-5 w-5 text-abb-primary" />
               <OnlineIndicator />
@@ -531,31 +624,42 @@ export function ChatWidget() {
 
             <div className="flex items-center gap-2">
               {/* New Chat shortcut */}
-              <button
-                type="button"
-                onClick={newSession}
-                disabled={isStreaming}
-                className="rounded p-1 text-white/70 hover:bg-white/10 hover:text-white focus:outline-none disabled:opacity-40 transition-colors"
-                aria-label="New chat"
-              >
-                <Plus className="h-5 w-5" strokeWidth={2.5} />
-              </button>
+              <div className="group relative flex">
+                <button
+                  type="button"
+                  onClick={newSession}
+                  disabled={isStreaming}
+                  className="rounded p-1 text-white/70 hover:bg-white/10 hover:text-white focus:outline-none disabled:opacity-40 transition-colors"
+                  aria-label="New chat"
+                >
+                  <Plus className="h-5 w-5" strokeWidth={2.5} />
+                </button>
+                <span className="pointer-events-none absolute right-0 top-full mt-2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity delay-500 group-hover:opacity-100 shadow-md border border-white/10">
+                  New Chat
+                </span>
+              </div>
 
               {/* Close */}
-              <button
-                type="button"
-                onClick={toggleOpen}
-                className="rounded p-1 hover:bg-white/10 focus:outline-none"
-                aria-label="Close chat"
-              >
-                <X className="h-5 w-5" />
-              </button>
+              <div className="group relative flex">
+                <button
+                  type="button"
+                  onClick={toggleOpen}
+                  className="rounded p-1 hover:bg-white/10 focus:outline-none text-white/80 transition-colors"
+                  aria-label="Close chat"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+                <span className="pointer-events-none absolute right-0 top-full mt-2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity delay-500 group-hover:opacity-100 shadow-md border border-white/10">
+                  Close
+                </span>
+              </div>
             </div>
           </header>
 
           {/* ── Message feed ───────────────────────────────────────────── */}
           <div
             ref={feedRef}
+            onScroll={handleScroll}
             className="flex-1 space-y-3 overflow-y-auto bg-abb-surface p-4"
           >
             {messages.length === 0 && (
@@ -567,18 +671,21 @@ export function ChatWidget() {
                   Ask about compliance, policies, or audits.
                 </p>
                 <div className="flex w-full flex-col items-stretch gap-2 px-4">
-                  {EMPTY_SUGGESTIONS.map((suggestion) => (
+                  {EMPTY_SUGGESTIONS.map((suggestion, idx) => (
                     <motion.button
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: idx * 0.1, duration: 0.3 }}
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       key={suggestion}
                       type="button"
                       disabled={isStreaming || !chatEnabled}
                       onClick={() => void handleSuggestionClick(suggestion)}
-                      className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white/60 backdrop-blur-sm p-3 text-left text-xs font-medium text-slate-700 shadow-sm transition-colors hover:border-abb-primary/40 hover:bg-white hover:text-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex items-center justify-between rounded-full border border-slate-200 bg-slate-50/50 px-4 py-2 text-left text-[11px] font-medium text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:border-red-200 hover:text-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span>{suggestion}</span>
-                      <ChevronRight className="h-4 w-4 opacity-50" />
+                      <ChevronRight className="ml-2 h-3 w-3 shrink-0 text-abb-primary opacity-70" />
                     </motion.button>
                   ))}
                 </div>
@@ -600,7 +707,7 @@ export function ChatWidget() {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${
+                  className={`relative flex flex-col max-w-[85%] rounded-2xl px-4 py-3.5 shadow-sm ${
                     isAssistant
                       ? "border border-slate-200 bg-white text-slate-800"
                       : "border border-white/20 bg-abb-primary text-white ring-1 ring-black/5"
@@ -650,11 +757,58 @@ export function ChatWidget() {
                         ))}
                       </div>
                     )}
+
+                  <div className={`mt-2 flex items-end justify-between gap-3 ${isAssistant ? "mt-3" : ""}`}>
+                    {/* Timestamps */}
+                    <span className={`text-[9px] ${isAssistant ? "text-slate-400" : "text-white/60"} mt-auto tracking-wider`}>
+                      {msg.timestamp || "12:00 PM"}
+                    </span>
+                    
+                    {/* ── Copy Action ── */}
+                    {isAssistant && !msg.isStreaming && (
+                      <div className="flex justify-end">
+                        <button
+                          onClick={() => void handleCopy(msg.id, msg.content)}
+                          className="flex items-center gap-1.5 rounded bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus:outline-none"
+                          aria-label="Copy to clipboard"
+                          title="Copy to clipboard"
+                        >
+                          {copiedMessageId === msg.id ? (
+                            <>
+                              <Check className="h-3 w-3 text-green-500" />
+                              <span className="text-green-600">Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3 w-3" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             );
             })}
           </div>
+
+          {/* ── Floating Jump to Bottom Button ── */}
+          <AnimatePresence>
+            {showJumpToBottom && (
+              <motion.button
+                initial={{ opacity: 0, y: 10, scale: 0.8 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: 0.8 }}
+                onClick={scrollToBottom}
+                className="absolute bottom-20 left-1/2 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full bg-white text-slate-600 shadow-lg ring-1 ring-slate-200 hover:bg-slate-50 hover:text-abb-primary focus:outline-none z-10"
+                aria-label="Scroll to bottom"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </motion.button>
+            )}
+          </AnimatePresence>
 
           {/* ── Error banner ────────────────────────────────────────────── */}
           {error && (
@@ -667,15 +821,17 @@ export function ChatWidget() {
           {/* ── Input bar ───────────────────────────────────────────────── */}
           <form
             onSubmit={handleSubmit}
-            className="flex gap-2 border-t border-slate-200 bg-white p-3"
+            className="flex gap-2 border-t border-slate-200 bg-white p-3 items-end"
           >
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder={inputPlaceholderForStatus(systemStatus)}
               disabled={!chatEnabled || isStreaming}
-              className="flex-1 rounded-xl border border-slate-200 bg-abb-surface px-3 py-2 text-sm outline-none focus:border-abb-primary focus:ring-1 focus:ring-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
+              rows={1}
+              className="no-scrollbar flex-1 resize-none overflow-y-auto rounded-xl border border-slate-200 bg-abb-surface px-3 py-2.5 leading-[1.4] text-sm outline-none transition-shadow focus:border-abb-primary focus:ring-1 focus:ring-red-500/30 disabled:cursor-not-allowed disabled:opacity-50"
             />
             <button
               type="submit"
