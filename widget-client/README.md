@@ -37,6 +37,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 | TypeScript | 5.7+ |
 | Tailwind CSS | 3.4+ |
 | Zustand | 5.x |
+| Framer Motion | latest |
 | Lucide React | latest |
 
 ---
@@ -45,7 +46,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VITE_GATEWAY_URL` | `http://localhost:3000` | The base URL of the Gateway Service. This is baked into the JavaScript bundle at build time by Vite. |
+| `VITE_GATEWAY_URL` | `http://localhost:3000` | The base URL of the Gateway Service. This is baked into the JavaScript bundle at build time by Vite. Always takes lower priority than the `gateway-url` HTML attribute. |
 
 ---
 
@@ -109,9 +110,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 ></compliance-chat-overlay>
 ```
 
-### Dev / Bypass Mode (REQUIRE_AUTH=false on gateway)
-
-When the gateway is running with `REQUIRE_AUTH=false`, you can omit `auth-token` entirely for local testing:
+### Dev / Bypass Mode (`REQUIRE_AUTH=false` on gateway)
 
 ```html
 <compliance-chat-overlay
@@ -146,51 +145,78 @@ widget.setAttribute('open', 'true');
 
 ---
 
-## UI Features
+## Bespoke UI Design Language
 
-- **Bespoke Enterprise Design** — High-end visual overhaul featuring Corporate Red accents (`#D71920`), thick Phosphor-style icons, and a custom SVG shield.
-- **Glassmorphism UI** — The widget header and sidebar utilize a `backdrop-blur-md` effect combined with semi-transparent backgrounds (`bg-slate-900/90`) for a modern, layered appearance.
-- **Micro-Interactions (Framer Motion)** — Fluid, spring-based animations power the chat bubbles (popping in with a slight bounce), sidebar sliding, and hover-state scaling on buttons.
-- **Floating launcher button** (bottom-right corner) — hidden when the panel is open, featuring an outer glow and smooth scaling on hover.
-- **System status indicator** — a small circular dot next to the "Compliance Assistant" header title, driven by `systemStatus` in Zustand. **Connecting** pulses amber; **online** pulses green; **offline** or **unauthorized** is solid red. Updated once on mount via `initializeSystem()`.
-- **Chat History sidebar** — collapsible drawer grouping past sessions into **Today**, **Previous 7 Days**, and **Older** sections. Empty groups are not rendered.
-- **Inline session rename** — hover any session row to reveal a pencil icon. Clicking it replaces the title text with a small `<input>`. Press **Enter** or click away to save; press **Esc** to cancel.
-- **New Chat button** — available in the sidebar header and as a shortcut in the main header; archives the current session before creating a fresh one.
-- **Session switching** — clicking a past session in the sidebar loads its message history from the gateway API.
-- **Identity badge** — sidebar displays the user's display name extracted from the JWT (see below), falling back to **"You"** when no name is available.
-- **Empty state action cards** — when `messages.length === 0`, three elegant, compact pill-shaped Action Cards stagger in via Framer Motion. Clicking an action card immediately sends that message.
-- **Auto-expanding professional input** — the input box is a `<textarea>` that automatically grows from 1 line to up to 150px as you type. It features a subtle red focus glow and supports multi-line entry via `Shift + Enter`.
-- **Message timestamps** — every chat bubble now includes a tiny, muted timestamp at the bottom corner for precise chat history tracking.
-- **Clipboard actions** — assistant messages feature a tiny "Copy" button that saves the plain text content directly to the user's clipboard, briefly turning green to read "Copied!".
-- **Intelligent scroll-to-bottom logic** — powered by `useLayoutEffect` which fires synchronously after each DOM paint, ensuring `scrollHeight` is always current. Four distinct triggers guarantee the user never loses the AI response:
-  1. **Streaming**: every token appended to the feed instantly snaps the view to the bottom (`behavior: 'auto'` prevents jitter).
-  2. **Message landed**: once a complete message is rendered (streaming finished), a smooth scroll (`behavior: 'smooth'`) anchors the view.
-  3. **History load**: selecting a past session from the sidebar triggers an immediate `scrollTo` on the next animation frame so the most-recent messages are shown, not the start of the conversation.
-  4. **Send**: pressing Enter or clicking "Send" calls `requestAnimationFrame(scrollToBottomInstant)` before the stream is awaited, so the user's own message and the "Thinking" skeleton are always visible.
-  A floating chevron button slides in when the user manually scrolls more than 200px above the bottom, allowing one-click smooth scrolling back to the newest message.
-- **Textarea scrollbar hidden** — the auto-expanding `<textarea>` carries the `no-scrollbar` CSS utility class, suppressing the visual red scrollbar (`scrollbar-width: none` for Firefox; `::-webkit-scrollbar { display: none }` for Chrome/Safari/Edge). The element still expands up to 150px and supports internal overflow scrolling — only the visual bar is removed. The bespoke red custom scrollbar is **preserved** on the chat message feed and the sidebar session list.
-- **Ultra-thin bespoke scrollbars** — custom webkit CSS scrollbars styled as ultra-thin (5px) semi-transparent Corporate Red pills. Icon buttons on the header now sport sleek, dark tooltips that fade in after a 500ms delay.
-- **Streaming message feed** — animated blinking cursor while the assistant is composing a reply.
-- **Error banner** — displayed on gateway or network failures with a human-readable message. Auth errors (`401 Unauthorized`) show *"Authentication failed. Please check your session."* instead of raw JSON.
-- **Input locked during streaming** — the send button and input field are disabled while an SSE stream is active, preventing double-sends.
-- **Input locked when system is not online** — the text input and send button are fully disabled whenever `systemStatus !== 'online'`. The placeholder updates to reflect the current state (connecting, auth failure, or service outage).
+The widget features a high-end, bespoke enterprise design language that goes beyond a generic chat UI:
 
----
+### Glassmorphism
 
-## UX Improvements for Streaming Latency
+The widget header and sidebar use **Enterprise Glassmorphism**: semi-transparent backgrounds (`bg-slate-900/90`) combined with a `backdrop-blur-md` blur effect, creating a modern layered depth. This is applied to both the main header bar and the collapsible session history drawer.
 
-With the new "Context Aggregator Pipeline" running on the backend, there is a natural latency before the first SSE token is streamed. To handle this gracefully, the UI features:
+### Framer Motion Spring Animations
 
-1. **Pre-Stream Loading Skeleton**: Before the first token arrives, an empty AI chat bubble appears containing a sleek, Tailwind-styled pulsing 3-dot skeleton. Once the backend begins streaming real text, the skeleton vanishes and the text streams naturally.
-2. **Input Locking**: While the backend is fetching context and streaming its response (indicated by the `isStreaming` state in Zustand), both the text input and the "Send" button are fully disabled. They exhibit lowered opacity and a "not-allowed" cursor to clearly signal to the user that they must wait for the current response to complete.
+All interactive transitions are powered by **framer-motion** with spring physics:
+- **Chat bubbles** pop in with a slight bounce (`type: "spring"`) on first render.
+- **Sidebar** slides in/out smoothly as the drawer opens and closes.
+- **Action Cards** stagger in with a cascading delay effect (`staggerChildren`) when the message list is empty.
+- **Hover states** on buttons and session rows use `whileHover` scaling transforms.
 
-Both of these features rely seamlessly on the centralized `isStreaming` boolean managed within `useChatStore`.
+### Custom Bespoke Scrollbar
+
+The chat message feed and sidebar session list use **ultra-thin (5px) Corporate Red custom scrollbars** styled via webkit CSS. They appear as semi-transparent red pills.
+
+The auto-expanding `<textarea>` carries the `no-scrollbar` utility class, suppressing the visible scrollbar on the input (`scrollbar-width: none` for Firefox; `::-webkit-scrollbar { display: none }` for Chrome/Safari/Edge) while still allowing internal overflow scrolling.
+
+### Premium Iconography & Branding
+
+- Solid, weighted **Phosphor-style** icons for a heavy, premium feel.
+- Custom sophisticated **"Compliance Assistant" SVG shield** in the header.
+- **Corporate Red** (`#D71920`) accent palette throughout.
+- **Layered 3D depth** — chat bubbles and Action Cards use subtle shadows and borders.
+- **Sleek dark tooltips** on icon buttons that fade in after a 500ms hover delay.
 
 ---
 
-## JWT Display Name Extraction
+## System Status Engine
 
-When the `auth-token` HTML attribute is set, the Web Component decodes the JWT **payload** (middle segment) using standard Base64 decoding — no external JWT library required. The decoded JSON is scanned for a display name in this priority order:
+On mount, `ChatWidget` calls `initializeSystem()` exactly **once**. This runs a `Promise.allSettled` against **two** gateway endpoints concurrently:
+
+| Probe | Endpoint | Verifies |
+|---|---|---|
+| Database | `GET /api/chat/history?userId=…` | Gateway + Postgres connectivity; also hydrates the session sidebar |
+| AI service | `GET /api/health` | AI microservice liveness (via gateway proxy) |
+
+Both requests include the `Authorization: Bearer <token>` header when `auth-token` is present.
+
+### Evaluation Logic
+
+The UI is only `"online"` if **both** probes return `200 OK`. The history probe's `401` status is checked first, before the general failure condition.
+
+| Condition | `systemStatus` |
+|---|---|
+| History probe returns `401` | `"unauthorized"` — checked first, before any other condition |
+| Either probe fails (network error, `5xx`) | `"offline"` |
+| **Both** probes return `200 OK` | `"online"` — sessions hydrated from history response |
+| Before probes complete | `"connecting"` (default on load) |
+
+### UI Effects Per Status
+
+| `systemStatus` | Header dot | Input placeholder | Input / send enabled |
+|---|---|---|---|
+| `connecting` | Pulsing **amber** | "Connecting to Compliance Assistant..." | No |
+| `online` | Pulsing **green** | "Type your question..." | Yes (unless streaming) |
+| `unauthorized` | Solid **red** | "Chat disabled: Authentication failed." | No |
+| `offline` | Solid **red** | "Service temporarily unavailable." | No |
+
+---
+
+## Identity — JWT Display Name Extraction
+
+When the `auth-token` HTML attribute is set, the Web Component decodes the JWT **payload** (middle segment) using standard Base64 decoding — **no external JWT library required**.
+
+**Implementation:** `src/utils/jwt.ts` — `decodeJwtPayload()` and `extractUserNameFromJwt()`
+
+The decoded JSON is scanned for a display name in this priority order:
 
 1. `name`
 2. `userName`
@@ -199,65 +225,131 @@ When the `auth-token` HTML attribute is set, the Web Component decodes the JWT *
 
 The first string value found is stored in the Zustand `userName` field via `setAuthToken()`. This name is shown:
 
-- In the **sidebar identity badge** (replacing hardcoded "Anonymous" / "User")
+- In the **sidebar identity badge** (replacing "Anonymous" / "User" hardcoded defaults)
 - As the **sender label** on human message bubbles (fallback: **"You"**)
-
-Implementation: `src/utils/jwt.ts` (`decodeJwtPayload`, `extractUserNameFromJwt`).
 
 > **Security note:** Payload decoding is for **display only**. Authentication is enforced by the gateway when verifying the Bearer token on each request.
 
 ---
 
-## System Status Engine
+## Interaction Logic
 
-On mount, `ChatWidget` calls `initializeSystem()` exactly once. This runs a `Promise.allSettled` against **two** gateway endpoints:
+### Auto-Expanding Textarea
 
-| Probe | Endpoint | Verifies |
-|---|---|---|
-| Database | `GET /api/chat/history?userId=…` | Gateway + Postgres connectivity |
-| AI service | `GET /api/health` | AI microservice liveness (via gateway proxy) |
+The chat input is a `<textarea>` (not `<input>`) that:
 
-Both requests include `?userId=${userId || 'dev_user_001'}` (history only) and an `Authorization: Bearer <token>` header when `auth-token` is present.
+- **Auto-expands** from 1 line up to a maximum of 150px as the user types, by setting `height: auto` then measuring `scrollHeight` on each `input` event.
+- **Submits** on **Enter** (sends message).
+- **Inserts a newline** on **Shift+Enter** (multi-line entry).
+- Displays a subtle **Corporate Red focus glow** when active.
+- Carries the `no-scrollbar` class to suppress the visual scrollbar while keeping internal overflow scrolling.
 
-### Evaluation logic
+### Staggered Action Cards
 
-The dual-health check logic dictates that the UI is only 'online' if BOTH the History fetch and the AI Health Proxy return `200 OK`.
+When `messages.length === 0`, three compact pill-shaped **Action Cards** animate into view using Framer Motion's `staggerChildren` (`staggerDelay: 0.1s`). Each card presents a pre-written compliance question. Clicking a card immediately calls `sendMessage()` with that text — the interaction is identical to typing and pressing Enter.
 
-| Condition | `systemStatus` |
-|---|---|
-| Either probe returns `401` | `unauthorized` |
-| Health probe fails **or** history fails (network error, `5xx`) | `offline` |
-| **Both** probes succeed (history may be an empty `[]`) | `online` |
-| Before probes complete | `connecting` (default on load) |
+### Intelligent Auto-Scroll
 
-### UI effects
+Powered by `useLayoutEffect` (fires synchronously after each DOM paint), four distinct triggers ensure the user never loses the AI response:
 
-| `systemStatus` | Header dot | Input placeholder | Input / send enabled |
-|---|---|---|---|
-| `connecting` | Pulsing amber | "Connecting to Compliance Assistant..." | No |
-| `online` | Pulsing green | "Type your question..." | Yes (unless streaming) |
-| `unauthorized` | Solid red | "Chat disabled: Authentication failed." | No |
-| `offline` | Solid red | "Service temporarily unavailable." | No |
+| Trigger | Scroll behaviour |
+|---------|-----------------|
+| **Streaming token** | `behavior: 'auto'` — instant snap to bottom on every new token (prevents jitter during rapid streaming) |
+| **Message complete** | `behavior: 'smooth'` — smooth scroll once `isStreaming` transitions to `false` |
+| **History load** | `requestAnimationFrame(scrollToBottomInstant)` — immediate scroll on the next animation frame after a past session is loaded from the API |
+| **Send** | `requestAnimationFrame(scrollToBottomInstant)` — called before the stream is awaited, so the user's own message and the loading skeleton are always visible |
+
+A floating **chevron-down button** slides in from the bottom-right when the user manually scrolls more than **200px above the bottom**. Clicking it performs a smooth scroll back to the newest message and the button disappears.
+
+---
+
+## UX Improvements for Streaming Latency
+
+With the Context Aggregator Pipeline running on the backend, there is a natural latency before the first SSE token arrives (guardrail + extractor run first). To handle this gracefully:
+
+1. **Pre-Stream Loading Skeleton** — Before the first token arrives, an empty AI chat bubble appears containing a sleek, Tailwind-styled pulsing 3-dot skeleton. Once the backend begins streaming real text, the skeleton vanishes and text streams naturally.
+2. **Input Locking** — While `isStreaming` is `true` in Zustand, both the text input and the "Send" button are fully disabled, with lowered opacity and a `cursor-not-allowed` style.
+
+---
+
+## SSE Stream Hook — `src/hooks/useChatStream.ts`
+
+The `useChatStream` hook handles the full Contract A → Contract C lifecycle:
+
+1. Reads `activeSessionId`, `userId`, `userRole`, `gatewayUrl`, and `authToken` from the Zustand store.
+2. POSTs to `gatewayUrl` with the Contract A body: `{ sessionId, userId, role, message }`.
+3. Attaches `Authorization: Bearer <token>` header only when `authToken` is present.
+4. Reads the streaming response body with `response.body.getReader()` + `TextDecoder`.
+5. Splits the decoded text on newlines and parses each `data: {...}` line.
+6. On `type: "token"` → calls `appendStreamToken(content)`.
+7. On `type: "sources"` → calls `setStreamSources(content)` — attaches the citation array to the current assistant message.
+8. On `type: "done"` → calls `finishStream()`.
+9. On `type: "error"` → checks for `/unauthorized/i` in the content and throws a user-friendly auth error; otherwise throws the raw content.
+10. Network/fetch errors are caught, formatted by `apiError.ts`, and forwarded to `setError()`.
+
+---
+
+## Contract A — Outbound Request Shape
+
+```http
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+Accept: text/event-stream
+Authorization: Bearer <jwt>   ← included only when auth-token attribute is set
+
+{
+  "sessionId": "sess_1748956800_abc123",
+  "userId": "usr_abc123",
+  "role": "reviewer",
+  "message": "Check Q2 compliance status."
+}
+```
+
+`sessionId` comes from `useChatStore.activeSessionId`.
+`userId` comes from `useChatStore.userId` (set from `user-id` attribute), falling back to `"dev_user_001"`.
+`role` comes from `useChatStore.userRole` (set from `user-role` attribute).
+
+> **Note:** When the gateway runs with `REQUIRE_AUTH=true`, the `Authorization` header is mandatory and `userId` in the body is ignored — the gateway extracts it from the verified JWT instead.
+
+## Contract C — Inbound SSE Shape
+
+Standard RAG response with optional citations:
+
+```
+data: {"type": "token", "content": "The Q2 "}
+data: {"type": "token", "content": "status is fully compliant."}
+data: {"type": "sources", "content": ["ISO_9001_Policy.pdf", "Q2_Audit_Report.pdf"]}
+data: {"type": "done"}
+```
+
+The `sources` event is **optional**. When absent (e.g. for general chat responses or when `ENABLE_CITATIONS=false`), no citation pills are rendered.
+
+Error event:
+
+```
+data: {"type": "error", "content": "AI service unavailable"}
+```
 
 ---
 
 ## State Architecture — Zustand (`src/store/useChatStore.ts`)
 
-The entire widget state lives in a single flat Zustand store. There is no React Context, no prop drilling, and no external state management dependency beyond Zustand itself.
+The entire widget state lives in a single flat Zustand store. No React Context, no prop drilling.
 
 ### Identity (set from HTML attributes)
 
 | Field | Type | Set by | Description |
 |-------|------|--------|-------------|
 | `userId` | `string` | `initUser()` | Mirrors the `user-id` HTML attribute |
-| `userRole` | `"user"` \| `"reviewer"` | `initUser()` | Mirrors the `user-role` HTML attribute (used for backend routing only — not shown in UI) |
+| `userRole` | `"user"` \| `"reviewer"` | `initUser()` | Mirrors the `user-role` HTML attribute |
 | `userName` | `string \| null` | `setAuthToken()` | Display name extracted from JWT payload; `null` when no token or no name claim |
+| `authToken` | `string \| null` | `setAuthToken()` | Raw JWT from the `auth-token` HTML attribute |
 
 ### Widget Visibility
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `isOpen` | `boolean` | Controls panel visibility — toggled by the launcher button |
+| `isOpen` | `boolean` | Controls panel visibility |
 
 ### Active Conversation
 
@@ -281,16 +373,12 @@ The entire widget state lives in a single flat Zustand store. There is no React 
 
 ```typescript
 type ChatSession = {
-  id: string;           // "sess_<timestamp>_<random>" or gateway UUID
-  title: string | null; // User-set name, or null if not yet renamed
-  date: string;         // ISO date string, e.g. "2026-06-03" — used for group bucketing
+  id: string;           // "sess_<timestamp>_<random>"
+  title: string | null; // User-set name, or null if not yet named; display falls back to "New Chat"
+  date: string;         // ISO date string "2026-06-03" — used for sidebar date grouping
   updatedAt: string;    // Full ISO timestamp of last activity
 };
 ```
-
-`title` is resolved for display as follows (in priority order):
-1. `title` (when non-null and non-empty)
-2. `"New Chat"` fallback
 
 #### `ChatMessage` type
 
@@ -301,6 +389,7 @@ type ChatMessage = {
   content: string;
   isStreaming?: boolean; // true while SSE tokens are still arriving
   sources?: string[];   // RAG citation filenames — populated by the Contract C `sources` event
+  timestamp?: string;   // Locale time string, e.g. "10:30 AM"
 };
 ```
 
@@ -310,25 +399,27 @@ type ChatMessage = {
 |--------|-----------|-------------|
 | `initUser` | `(id, role) => void` | Called once by `mount.tsx` after reading HTML attributes. Seeds `userId` and `userRole`. |
 | `setGatewayUrl` | `(url) => void` | Updates the Contract A endpoint from the `gateway-url` attribute. |
+| `setAuthToken` | `(token \| null) => void` | Stores the JWT and decodes `userName` from its payload via `extractUserNameFromJwt()`. |
 | `toggleOpen` | `() => void` | Toggles panel visibility. |
 | `setOpen` | `(bool) => void` | Explicitly open or close the panel. |
 | `toggleSidebar` | `() => void` | Toggles the history sidebar drawer. |
 | `setSidebarOpen` | `(bool) => void` | Explicitly open or close the sidebar. |
-| `newSession` | `() => void` | Archives the current session into `sessions[]` (title = first user message, up to 48 chars), then creates a fresh `activeSessionId` and clears `messages`. |
+| `newSession` | `() => void` | Creates a fresh `activeSessionId` and clears `messages`. Does **not** archive an empty session (guards against ghost entries). |
 | `setActiveSession` | `(sessionId) => void` | Sets `activeSessionId` and clears `messages` without fetching from the API. |
-| `loadSession` | `(sessionId) => Promise<void>` | Fetches `GET /api/chat/history/:sessionId?userId=…` and hydrates messages. Delegates to `fetchSessionMessages`. |
-| `fetchSessionMessages` | `(sessionId) => Promise<void>` | Same as `loadSession` — passes `userId` query param and auth headers. |
-| `fetchHistory` | `() => Promise<void>` | Fetches session list for current user (`userId || 'dev_user_001'`) without updating `systemStatus`. |
+| `loadSession` | `(sessionId) => Promise<void>` | Alias for `fetchSessionMessages` — fetches messages for a session. |
+| `fetchSessionMessages` | `(sessionId) => Promise<void>` | Fetches `GET /api/chat/history/:sessionId?userId=…`, hydrates `messages`, sets `activeSessionId`. |
+| `loadSessions` | `(userId) => Promise<void>` | Fetches `GET /api/chat/history?userId=…` and hydrates the `sessions` sidebar list. |
+| `fetchHistory` | `() => Promise<void>` | Calls `loadSessions` for the current `userId` (reads from store). |
 | `initializeSystem` | `() => Promise<void>` | Dual health check on mount: `GET /api/chat/history` + `GET /api/health`. Sets `systemStatus` and hydrates `sessions` when both succeed. |
-| `addUserMessage` | `(content) => string` | Appends a `{ role: userRole, content }` message; returns the generated ID. |
-| `startAssistantMessage` | `() => string` | Appends an empty streaming assistant message; returns its ID. |
+| `renameSession` | `(sessionId, newTitle) => Promise<void>` | **Optimistically** updates the local `sessions` array then PATCHes `PATCH /api/chat/history/:sessionId`. Rolls back and sets `error` on failure. |
+| `addUserMessage` | `(content) => string` | Appends a `{ role: userRole, content, timestamp }` message and upserts the session into the sidebar list; returns the generated ID. |
+| `startAssistantMessage` | `() => string` | Appends an empty streaming assistant message with `isStreaming: true`; returns its ID. |
 | `appendStreamToken` | `(token) => void` | Appends a token string to the last assistant message's `content`. |
 | `setStreamSources` | `(sources: string[]) => void` | Attaches RAG citation filenames to the currently-streaming assistant message. Called when the Contract C `sources` SSE event is received. |
 | `finishStream` | `() => void` | Sets `isStreaming: false` on all messages; releases the streaming lock. |
 | `setError` | `(msg \| null) => void` | Sets or clears the error banner. |
 | `setStreaming` | `(bool) => void` | Manually controls the streaming lock. |
-| `clearMessages` | `() => void` | Clears messages and generates a new session ID (used in dev). |
-| `renameSession` | `(sessionId, newTitle) => Promise<void>` | **Optimistically** updates the local `sessions` array then PATCHes `PATCH /api/chat/history/[sessionId]`. Rolls back and sets `error` on failure. |
+| `clearMessages` | `() => void` | Clears messages and generates a new session ID. |
 
 ### Session History Flow
 
@@ -338,15 +429,24 @@ User clicks "New Chat" (or + icon)
         ▼
 newSession() is called
         │
-        ├─ messages.length > 0?
-        │    YES → title = first user message (≤ 48 chars + "…" if longer)
-        │         → archived ChatSession prepended to sessions[]
-        │    NO  → nothing archived (don't create empty session records)
-        │
         └─ reset:
-             activeSessionId = new generateSessionId()
+             activeSessionId = new generateSessionId()  ("sess_<ts>_<rand>")
              messages = []
+             isStreaming = false
+             error = null
              isSidebarOpen = false
+
+User sends first message in a new session
+        │
+        ▼
+addUserMessage(content) called
+        │
+        └─ upsertSessionOnMessage() runs:
+             session not in sessions[] yet?
+               → create: { id, title: content.slice(0, 48) + "…", date, updatedAt }
+               → prepend to sessions[]
+             session already in sessions[]?
+               → update updatedAt and date, move to front
 
 User clicks a past session in the sidebar
         │
@@ -375,7 +475,7 @@ User clicks pencil → title text becomes <input> (inline)
 
 ## Sidebar Date Grouping
 
-The `ChatSidebar` component groups sessions into sections using the `date` field (ISO string) stored on each `ChatSession`:
+The `ChatSidebar` component groups sessions into sections using the `date` field (ISO date string, `"YYYY-MM-DD"`) on each `ChatSession`:
 
 | Section | Condition |
 |---|---|
@@ -383,7 +483,7 @@ The `ChatSidebar` component groups sessions into sections using the `date` field
 | **Previous 7 Days** | `session.date >= (today − 7 days)` and not today |
 | **Older** | Everything else |
 
-The `groupSessionsByDate()` helper function (in `ChatWidget.tsx`) performs this bucketing. Sections with zero sessions are omitted entirely — no empty headings are rendered.
+The `groupSessionsByDate()` helper function performs this bucketing. Sections with zero sessions are **omitted entirely** — no empty headings are rendered.
 
 ---
 
@@ -392,96 +492,14 @@ The `groupSessionsByDate()` helper function (in `ChatWidget.tsx`) performs this 
 Every session row in the sidebar has a hover-revealed pencil (✏️) icon. The interaction is handled by the `SessionItem` component:
 
 1. **Hover** the row → `<Pencil />` icon fades in (via Tailwind `invisible group-hover/item:visible`).
-2. **Click pencil** → title `<p>` swaps out for a transparent `<input>` pre-filled with the current title (or blank if it was "New Chat").
+2. **Click pencil** → title `<p>` swaps out for a transparent `<input>` pre-filled with the current title (or blank if it was `"New Chat"`).
 3. **Commit** via **Enter** or **blur** → calls `renameSession(id, newTitle)` in the Zustand store:
    - Immediate **optimistic update** in the local `sessions[]` array.
-   - **PATCH** `{gateway-url}/api/chat/history/:sessionId` with `{ title: newTitle }`.
+   - **PATCH** `{gatewayBase}/api/chat/history/:sessionId` with `{ title: newTitle }`.
    - On failure: the previous sessions array is restored and `error` is set (error banner shown).
 4. **Cancel** via **Escape** → input dismissed, no network request, title unchanged.
 
 > If the submitted value is blank or unchanged, `renameSession` is not called.
-
----
-
-## SSE Stream Hook — `src/hooks/useChatStream.ts`
-
-The `useChatStream` hook handles the full Contract A → Contract C lifecycle:
-
-1. Reads `activeSessionId`, `userId`, `userRole`, and `gatewayUrl` from the Zustand store.
-2. POSTs to `gatewayUrl` with the Contract A body: `{ sessionId, userId, role, message }`.
-3. Reads the streaming response body with `response.body.getReader()` + `TextDecoder`.
-4. Splits the decoded text on newlines and parses each `data: {...}` line.
-5. On `type: "token"` → calls `appendStreamToken(content)`.
-6. On `type: "sources"` → calls `setStreamSources(content)` — attaches the citation array to the current assistant message.
-7. On `type: "done"` → calls `finishStream()`.
-8. On `type: "error"` → calls `setError(content)`.
-9. Network/fetch errors are caught and forwarded to `setError()`.
-
----
-
-## Contract A — Outbound Request Shape
-
-```http
-POST http://localhost:3000/api/chat
-Content-Type: application/json
-Accept: text/event-stream
-Authorization: Bearer <jwt>   ← included only when auth-token attribute is set
-
-{
-  "sessionId": "sess_1748956800_abc123",
-  "userId": "usr_abc123",
-  "role": "reviewer",
-  "message": "Check Q2 compliance status."
-}
-```
-
-`userId` comes from `useChatStore.userId` (set from `user-id` attribute). Optional in the JSON body, it falls back to `dev_user_001` in the code.
-`role` comes from `useChatStore.userRole` (set from `user-role` attribute).
-
-> **Note:** When the gateway runs with `REQUIRE_AUTH=true`, the `Authorization` header is mandatory and `userId` in the body is ignored — the gateway extracts it from the verified JWT instead.
-
-## Contract C — Inbound SSE Shape
-
-Standard RAG response with citations:
-
-```
-data: {"type": "token", "content": "The Q2 "}
-data: {"type": "token", "content": "status is fully compliant."}
-data: {"type": "sources", "content": ["ISO_9001_Policy.pdf", "Q2_Audit_Report.pdf"]}
-data: {"type": "done"}
-```
-
-The `sources` event is **optional**. When absent (e.g. for general chat responses), no citation pills are rendered.
-
-Error event:
-
-```
-data: {"type": "error", "content": "AI service unavailable"}
-```
-
----
-
-## Project Structure
-
-```
-widget-client/
-├── index.html                  # Dev host page (mounts widget with all attributes)
-├── vite.config.ts              # Dev server config + lib build output
-├── tailwind.config.js          # ABB brand color tokens
-├── postcss.config.js
-└── src/
-    ├── mount.tsx               # Web Component class — reads attributes, calls initUser()
-    ├── index.css               # Tailwind directives + :host { all: initial }
-    ├── store/
-    │   └── useChatStore.ts     # Zustand store — identity, sessions, messages, actions
-    ├── utils/
-    │   ├── jwt.ts              # JWT payload Base64 decode + display name extraction
-    │   └── apiError.ts         # Human-readable error formatting (401 → session message)
-    ├── hooks/
-    │   └── useChatStream.ts    # Contract A POST + Contract C SSE parsing
-    └── components/
-        └── ChatWidget.tsx      # Full panel UI: sidebar, message feed, input bar
-```
 
 ---
 
@@ -543,6 +561,30 @@ npm run preview
 
 ---
 
+## Project Structure
+
+```
+widget-client/
+├── index.html                  # Dev host page (mounts widget with all attributes)
+├── vite.config.ts              # Dev server config + lib build output
+├── tailwind.config.js          # ABB brand color tokens
+├── postcss.config.js
+└── src/
+    ├── mount.tsx               # Web Component class — reads attributes, calls initUser() + setAuthToken()
+    ├── index.css               # Tailwind directives + :host { all: initial } + custom scrollbar styles
+    ├── store/
+    │   └── useChatStore.ts     # Zustand store — identity, sessions, messages, all actions
+    ├── utils/
+    │   ├── jwt.ts              # JWT payload Base64 decode + display name extraction
+    │   └── apiError.ts         # Human-readable error formatting (401 → auth error message)
+    ├── hooks/
+    │   └── useChatStream.ts    # Contract A POST + Contract C SSE parsing
+    └── components/
+        └── ChatWidget.tsx      # Full panel UI: sidebar, message feed, input bar, action cards
+```
+
+---
+
 ## Customisation
 
 **Safe to change without breaking contracts:**
@@ -550,7 +592,6 @@ npm run preview
 - Color tokens in `tailwind.config.js` (`abb.primary`, `abb.dark`, `abb.surface`)
 - Panel dimensions (`h-[560px] w-[400px]`) in `ChatWidget.tsx`
 - Sidebar width (`w-64`) in `ChatWidget.tsx`
-- Sidebar mock seed data in `buildMockSessions()` inside `useChatStore.ts`
 
 **Do not change without coordinating with gateway and AI service:**
 
@@ -568,14 +609,15 @@ npm run preview
 | CORS error in console | Gateway is running and `gateway-url` attribute is correct |
 | Stream never ends | AI service must emit a `{"type":"done"}` event to signal completion |
 | Styles look unstyled | Build must inline CSS; verify `?inline` import in `mount.tsx` |
-| 502 from fetch | Start AI service and gateway before the widget |
-| Sidebar not visible | Intentional — `overflow-hidden` on the panel container clips the drawer |
+| `502` from fetch | Start AI service and gateway before the widget |
+| Sidebar not visible | Intentional — `overflow-hidden` on the panel container clips the drawer until opened |
 | `userId` missing in gateway payload | Verify `user-id` attribute is set on the element |
 | `401 Unauthorized` from gateway | Gateway has `REQUIRE_AUTH=true`. Either set `auth-token` on the element or set `REQUIRE_AUTH=false` for local testing. |
 | Token rejected with "signature failed" | Verify the JWT was signed with the same `JWT_SECRET` configured in gateway `.env`. |
 | Citation pills not appearing | Verify the AI service has `ENABLE_CITATIONS=true` and that a ChromaDB-backed RAG query was made (general chat queries do not emit a `sources` event). |
-| Rename fails with 404/405 | The gateway `PATCH /api/chat/history/[sessionId]` endpoint is not deployed. The UI automatically rolls back the optimistic title update and shows an error banner. Deploy the gateway endpoint first. |
-| Rename rolls back immediately | Check the gateway console for the PATCH response status. Usually a JWT/auth issue — ensure `auth-token` is set if `REQUIRE_AUTH=true`. |
+| Status stuck on "connecting" | Both `GET /api/chat/history` AND `GET /api/health` must return `200`. Check both services are running. |
+| Rename fails with `404`/`405` | The gateway `PATCH /api/chat/history/:sessionId` endpoint is not deployed. UI automatically rolls back the optimistic title update and shows an error banner. |
+| Rename rolls back immediately | Check the gateway console for the PATCH response status. If `REQUIRE_AUTH=true`, ensure `auth-token` is set and valid. |
 
 ---
 

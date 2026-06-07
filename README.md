@@ -34,22 +34,25 @@ flowchart TB
   subgraph gateway["gateway-service  :3000"]
     API["Next.js 16 App Router\nNode.js runtime"]
     DB["PostgreSQL via Prisma 7"]
+    HP["Health Proxy\n(GET /api/health)"]
   end
 
   subgraph ai["ai-service  :8000"]
-    PIPELINE["Context Aggregator Pipeline"]
-    GUARD["Security Guardrail"]
-    EXTRACT["Extractor & Fetchers"]
-    SYNTH["Synthesizer (Groq/Azure)"]
+    GUARD["Step 1: Security Guardrail"]
+    EXTRACT["Step 2: Extractor"]
+    FETCH["Step 3: Context Fetchers\n(ChromaDB / Report DB)"]
+    SYNTH["Step 4: Synthesizer\n(Groq / Azure OpenAI)"]
   end
 
   WC -->|"HTML attributes"| UI
   UI -->|"Contract A  POST /api/chat"| API
+  UI -->|"GET /api/health (Health Proxy)"| HP
   API --> DB
-  API -->|"Contract B  POST /v1/chat/stream"| PIPELINE
-  PIPELINE --> GUARD
+  HP -->|"probes GET /health"| ai
+  API -->|"Contract B  POST /v1/chat/stream"| GUARD
   GUARD --> EXTRACT
-  EXTRACT --> SYNTH
+  EXTRACT --> FETCH
+  FETCH --> SYNTH
   SYNTH -->|"Contract C  SSE"| API
   API -->|"Contract C  SSE passthrough"| UI
 ```
@@ -58,22 +61,30 @@ flowchart TB
 
 | Module | Port (dev) | Responsibility | Stack |
 |--------|------------|----------------|-------|
-| [widget-client](./widget-client/) | 5173 | Shadow DOM Web Component, chat UI, session history sidebar, SSE client. **Features input locking and a loading skeleton during extraction latency.** | React 19, Vite 6, Zustand 5, Tailwind CSS 3 |
-| [gateway-service](./gateway-service/) | 3000 | Session upsert, message persistence, SSE stream proxy | Next.js 16.1.4, Prisma 7, PostgreSQL |
-| [ai-service](./ai-service/) | 8000 | **Context Aggregator Pipeline**, Security Guardrails, entity extraction, dynamic prompting (**GENERAL_CHAT** path for greetings/general knowledge, **COMPLIANCE_RAG** path for policy/audit questions), ChromaDB RAG retrieval, LLM streaming | FastAPI, LangChain, Groq / Azure OpenAI |
+| [widget-client](./widget-client/) | 5173 | Shadow DOM Web Component, chat UI, session history sidebar, SSE client. Dual health check on mount; input locked during streaming. | React 19, Vite 6, Zustand 5, Tailwind CSS 3 |
+| [gateway-service](./gateway-service/) | 3000 | JWT auth, session upsert, message persistence, SSE stream proxy, AI health proxy | Next.js 16.1.4, Prisma 7, PostgreSQL |
+| [ai-service](./ai-service/) | 8000 | Context Aggregator Pipeline (Guardrail → Extractor → Fetchers → Synthesizer), ChromaDB RAG retrieval, LLM streaming | FastAPI, LangChain, Groq / Azure OpenAI |
 
 **Isolation rule:** No shared packages, no monorepo libs, no cross-folder imports. Integration is HTTP-contract-only.
 
 ---
 
-## UI/UX Design Language
+## Health Proxy Engine
 
-The system features a bespoke, high-end enterprise design language in the `widget-client` to provide a premium user experience distinct from generic AI chatbots. Key elements include:
+`GET /api/health` on the gateway is not a simple liveness endpoint — it is a **reverse proxy** that verifies the AI microservice is reachable. The widget calls it on mount as part of the dual health check.
 
-- **Enterprise Glassmorphism:** Semi-transparent backgrounds (`backdrop-blur-md`) applied to the widget header and sidebar.
-- **Micro-Interactions:** Fluid, spring-based animations powered by `framer-motion` for chat bubbles popping in, sidebar sliding, and interactive hover states.
-- **Premium Iconography & Branding:** Solid, weighted icons (Phosphor-style) and a custom sophisticated "Compliance Assistant" SVG shield, accented by a tailored Corporate Red palette.
-- **Layered 3D Depth:** Chat bubbles and Action Cards utilize subtle shadows and borders to create depth in 3D space.
+**Probe URL derivation:** The gateway strips the path from `AI_SERVICE_URL` and appends `/health`.
+For example: `http://192.168.1.50:8000/v1/chat/stream` → probes `http://192.168.1.50:8000/health`.
+
+**Behaviour:**
+
+| Condition | Gateway response |
+|-----------|-----------------|
+| AI service responds `2xx` | `200 { "status": "ok", "ai": "online" }` |
+| AI service unreachable / timeout / non-2xx | `503 { "status": "error", "ai": "offline" }` |
+| `AI_SERVICE_URL` not configured | `503` immediately |
+
+The widget only sets `systemStatus = "online"` when **both** the history probe (`GET /api/chat/history`) AND this health proxy return `200 OK`.
 
 ---
 
@@ -109,8 +120,8 @@ These three contracts are the **only** coupling between modules. Changing any fi
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `sessionId` | `string` | **Yes** | Client-generated stable session identifier (format: `sess_<timestamp>_<random>`) |
-| `userId` | `string` | Optional | User ID from the `user-id` HTML attribute. **Ignored by the gateway when `REQUIRE_AUTH=true`** — the gateway extracts `userId` from the verified JWT instead. Optional in the JSON body when `REQUIRE_AUTH=false`, falling back to `dev_user_001` in the code. |
-| `role` | `"user"` \| `"reviewer"` | **Yes** | Active persona; affects AI routing in the semantic router |
+| `userId` | `string` | Optional | User ID from the `user-id` HTML attribute. **Ignored by the gateway when `REQUIRE_AUTH=true`** — the gateway extracts `userId` from the verified JWT instead. Falls back to `dev_user_001` in the widget code when empty. |
+| `role` | `"user"` \| `"reviewer"` | **Yes** | Active persona. Stored in the session record. **Hardcoded to `"user"` before forwarding to the AI service** (Contract B). |
 | `message` | `string` | **Yes** | The user's message text |
 
 **Response:** `200 OK` with `Content-Type: text/event-stream` (Contract C).
@@ -151,9 +162,9 @@ These three contracts are the **only** coupling between modules. Changing any fi
 | Field | Type | Description |
 |-------|------|-------------|
 | `conversation_id` | `string` | Mapped from Contract A `sessionId` |
-| `role` | `"user"` | Hardcoded to `"user"` by the gateway (Contract B always receives `"user"`) |
+| `role` | `"user"` | **Always hardcoded to `"user"` by the gateway.** The original widget `role` (e.g. `"reviewer"`) is stored in the session record but never forwarded to the AI service. |
 | `query` | `string` | Mapped from Contract A `message` |
-| `context_history` | `Array<{ role, content }>` | The Gateway fetches the last 5 conversation turns (11 messages total) to prevent token overflow if `ENABLE_AI_MEMORY=true`, otherwise `[]` |
+| `context_history` | `Array<{ role, content }>` | Prior conversation turns. When `ENABLE_AI_MEMORY=true`, the gateway fetches the last 5 turns (up to 10 messages) from Postgres to prevent token overflow. When `false`, always `[]`. |
 
 **Response:** `200 OK` with `Content-Type: text/event-stream` (Contract C).
 
@@ -167,31 +178,55 @@ Each event is a single line starting with `data:` followed by a JSON object. The
 data: {"type": "token", "content": "The Q2 "}
 data: {"type": "token", "content": "compliance status is "}
 data: {"type": "token", "content": "fully compliant."}
+data: {"type": "sources", "content": ["compliance_policy.pdf", "audit_guide.txt"]}
 data: {"type": "done"}
 ```
 
 | `type` | Extra fields | Meaning |
 |--------|-------------|---------|
 | `token` | `content: string` | Incremental assistant text chunk |
-| `sources` | `content: string[]` | **Optional.** Deduplicated list of source filenames retrieved from ChromaDB. Only emitted if `ENABLE_CITATIONS=true`. Always sent **before** `done`. |
+| `sources` | `content: string[]` | **Optional.** Deduplicated, sorted list of source filenames retrieved from ChromaDB. Only emitted if `ENABLE_CITATIONS=true`. Always sent **before** `done`. |
 | `done` | — | Stream is complete; client should finalise the message |
 | `error` | `content: string` | Stream failed; client should show an error state |
 
-### Master Health & Status Logic
+---
 
-The system implements a dual-health check logic: The UI is only 'online' if BOTH the History fetch and the AI Health Proxy return `200 OK`.
-The `systemStatus` states are:
-- `connecting`: Connecting to services.
-- `online`: Both probes succeeded.
-- `offline`: Health or history probe failed.
-- `unauthorized`: History probe returned `401`.
+## System Status & Health Engine
+
+The widget implements a **dual health check** on mount via `initializeSystem()`, running both probes concurrently with `Promise.allSettled`:
+
+| Probe | Endpoint | Verifies |
+|-------|----------|----------|
+| Database | `GET /api/chat/history?userId=…` | Gateway + Postgres connectivity |
+| AI service | `GET /api/health` | AI microservice liveness (via gateway proxy) |
+
+### `systemStatus` State Machine
+
+| `systemStatus` | Trigger | UI effect |
+|----------------|---------|-----------|
+| `connecting` | Default on load, before probes complete | Pulsing amber dot; input disabled |
+| `online` | **Both** probes return `200 OK` | Pulsing green dot; input enabled |
+| `offline` | Either probe fails (network error, `5xx`) | Solid red dot; input disabled |
+| `unauthorized` | History probe returns `401` | Solid red dot; auth error message |
+
+---
+
+## Security Master Table
+
+| Variable | Service | Description |
+|----------|---------|-------------|
+| `REQUIRE_AUTH` | Gateway | When `true` (default), every `POST /api/chat` and `GET /api/chat/history` requires a valid `Authorization: Bearer <JWT>` header. When `false`, JWT verification is bypassed and `userId` from the request body is trusted directly (dev only). |
+| `JWT_SECRET` | Gateway | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Used by `src/lib/auth.ts` via Node.js's built-in `crypto` module. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `ALLOWED_ORIGINS` | Gateway | Comma-separated origin allowlist for CORS. When empty, defaults to wildcard `*` (dev only). When set, only matching origins receive `Access-Control-Allow-Origin: <origin>` plus `Access-Control-Allow-Credentials: true`. |
+
+> [!CAUTION]
+> **Never** set `REQUIRE_AUTH=false` or leave `ALLOWED_ORIGINS` empty in production.
 
 ---
 
 ## Master Boot Sequence
 
-Follow these instructions to start the system using the provided automation scripts. 
-**Note:** `./install.sh` and `./start.sh` are the exclusively supported scripts and the **only** way to initialize and run the production environment.
+`./install.sh` and `./start.sh` are the exclusively supported scripts and the **only** way to initialize and run the production environment.
 
 ### Prerequisites
 
@@ -205,6 +240,7 @@ Follow these instructions to start the system using the provided automation scri
 ### Step 1 — Database & Environment Setup
 
 1. **Database**: Spin up your local PostgreSQL container (or use a cloud DB like Supabase/Neon).
+
 ```bash
 docker run --name gateway-postgres \
   -e POSTGRES_USER=postgres \
@@ -213,9 +249,18 @@ docker run --name gateway-postgres \
   -p 5432:5432 \
   -d postgres:16-alpine
 ```
+
 2. **Environment Variables**:
    - `gateway-service/.env`: Set `DATABASE_URL` and `AI_SERVICE_URL` (e.g. `http://localhost:8000/v1/chat/stream`).
    - `ai-service/.env`: Set `GROQ_API_KEY` (or Azure settings).
+
+3. **Push the database schema** (first time only):
+
+```bash
+cd gateway-service
+npx prisma db push
+cd ..
+```
 
 ---
 
@@ -229,16 +274,40 @@ chmod +x *.sh
 ./start.sh
 ```
 
-- `install.sh`: Installs npm packages, generates Prisma schema, and sets up the Python virtual environment.
-- `start.sh`: Builds and starts both the Gateway Service (port 3000) and the AI Service (port 8000) in the background.
+**What `install.sh` does** (in order):
+1. `cd gateway-service && npm install && npx prisma generate` — installs Node dependencies and generates the Prisma TypeScript client.
+2. `cd ai-service && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt` — creates the Python virtual environment and installs all pinned dependencies.
 
-Check the console output for the successful PIDs.
+**What `start.sh` does** (in order):
+1. `cd gateway-service && npm run build && npm start &` — builds the Next.js production bundle and starts the gateway server on port **3000** in the background. Records PID as `$GATEWAY_PID`.
+2. `cd ai-service && source .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000 &` — starts the FastAPI server on port **8000** in the background. Records PID as `$AI_PID`.
+3. Prints both PIDs on success.
+
+> [!IMPORTANT]
+> `install.sh` runs `npx prisma generate` but **not** `npx prisma db push`. Run `npx prisma db push` manually in `gateway-service/` before the first `./start.sh` to create the database tables.
 
 ---
 
-### Terminal 4 — Widget Client
+### Step 3 — RAG Knowledge Base (First-Time Setup)
 
-```powershell
+Before the AI service can answer compliance-specific questions, populate the ChromaDB vector store:
+
+```bash
+# Place .pdf or .txt compliance documents in ai-service/data/
+# Then run the ingestion script:
+cd ai-service
+source .venv/bin/activate
+python -m app.ingest
+cd ..
+```
+
+The `ingest.py` script is idempotent — re-run it whenever your compliance documents change.
+
+---
+
+### Step 4 — Widget Client
+
+```bash
 cd widget-client
 npm install
 npm run dev
@@ -268,23 +337,15 @@ curl "http://localhost:3000/api/chat/history/sess_smoke"
 
 ---
 
-## Security Master Table
-
-| Variable | Description |
-|----------|-------------|
-| `REQUIRE_AUTH` | Controls how it enables/bypasses JWT verification. |
-| `JWT_SECRET` | Used for HS256 verification of the JWT. |
-| `ALLOWED_ORIGINS` | Determines how CORS whitelists the frontend URL. |
-
 ## Environment Variables
 
 | Service | Variable | Default | Purpose |
-|---------|----------|---------|---------|
+|---------|----------|---------|---------| 
 | Gateway | `DATABASE_URL` | — | **Required.** PostgreSQL connection string |
-| Gateway | `AI_SERVICE_URL` | — | **Required.** Full URL to ai-service `/v1/chat/stream`. Use intranet IP, not localhost. |
-| Gateway | `ENABLE_AI_MEMORY` | `true` | When `true`, injects prior conversation turns into Contract B payload. |
-| Gateway | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` requires `Authorization: Bearer <JWT>`. When `false`, bypasses JWT check and trusts `userId` from the request body (dev only). |
-| Gateway | `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`  |
+| Gateway | `AI_SERVICE_URL` | — | **Required.** Full URL to ai-service `/v1/chat/stream`. Use intranet IP, not `localhost`, when services are on different hosts. |
+| Gateway | `ENABLE_AI_MEMORY` | `true` | When `true`, injects prior conversation turns into Contract B `context_history`. |
+| Gateway | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` and `GET /api/chat/history` require `Authorization: Bearer <JWT>`. When `false`, bypasses JWT check (dev only). |
+| Gateway | `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). |
 | Gateway | `ALLOWED_ORIGINS` | `""` (wildcard `*`) | Comma-separated origin allowlist for CORS. Empty = `Access-Control-Allow-Origin: *` (dev only). |
 | Widget | `VITE_GATEWAY_URL` | `http://localhost:3000` | Base URL of the gateway, baked into the JS bundle at build time. Set before `npm run build`. |
 | AI | `GROQ_API_KEY` | `""` | Groq API key (required unless `USE_AZURE=true`) |
@@ -347,6 +408,8 @@ This produces `dist/compliance-chat-overlay.es.js` (ES module) and `dist/complia
 ```
 ABB Chatbot Overlay/
 ├── README.md                      ← this file
+├── install.sh                     ← installs gateway (npm) + ai-service (.venv + pip)
+├── start.sh                       ← builds & starts gateway (:3000) + ai-service (:8000)
 ├── ai-service/
 │   ├── README.md
 │   ├── .env.example
@@ -365,19 +428,24 @@ ABB Chatbot Overlay/
 │   ├── prisma.config.ts
 │   └── src/
 │       ├── lib/
+│       │   ├── auth.ts
 │       │   ├── contracts.ts
+│       │   ├── logger.ts
 │       │   └── prisma.ts
-│       └── app/api/chat/
-│           ├── route.ts
-│           └── history/
+│       └── app/api/
+│           ├── health/route.ts
+│           └── chat/
 │               ├── route.ts
-│               └── [sessionId]/route.ts
+│               └── history/
+│                   ├── route.ts
+│                   └── [sessionId]/route.ts
 └── widget-client/
     ├── README.md
     └── src/
         ├── mount.tsx
         ├── store/useChatStore.ts
         ├── hooks/useChatStream.ts
+        ├── utils/jwt.ts
         └── components/ChatWidget.tsx
 ```
 
@@ -388,7 +456,7 @@ ABB Chatbot Overlay/
 1. **Contract-first integration** — Internals are yours to change. Contracts are shared and versioned.
 2. **Stream-first UX** — Tokens reach the browser immediately via TransformStream passthrough. The full reply is persisted to Postgres only after the stream closes.
 3. **Shadow DOM isolation** — Widget styles and layout are fully isolated from the host page.
-4. **Semantic routing** — The `reviewer` role and compliance-specific keywords route to the deeper RAG path in the AI service.
+4. **Semantic routing** — The 4-stage Context Aggregator Pipeline routes queries to either the GENERAL_CHAT fast path or the COMPLIANCE_RAG path with ChromaDB retrieval.
 5. **Multi-tenant persistence** — Every message is associated with a `userId` and `sessionId`. The history API supports per-user session retrieval.
 
 ---
@@ -398,14 +466,15 @@ ABB Chatbot Overlay/
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
 | AI returns "I do not have enough information" for compliance questions | `chroma_db/` not yet created | Add documents to `ai-service/data/` and run `python -m app.ingest`; see [ai-service README](./ai-service/README.md#️-troubleshooting) |
-| AI says "I do not have enough information" for "hi" or "what is AI" | Old code without general-chat path | Update to latest `semantic_router.py`; the `is_general_chat` extractor now routes greetings/general questions to a relaxed prompt |
-| Widget shows network error | Gateway not running or wrong `gateway-url` | Start gateway on `:3000`; verify attribute |
+| Widget shows "Connecting..." permanently | Gateway not running or wrong `gateway-url` | Start gateway on `:3000`; verify attribute |
+| Widget shows "offline" status | Either gateway or AI service down | Check both services are running on `:3000` and `:8000` |
 | Gateway returns `502` | AI service down | Start `uvicorn` on `:8000` |
-| Gateway returns `500` | `DATABASE_URL` missing or Postgres down | Check `.env.local`; verify Docker container |
+| Gateway returns `500` | `DATABASE_URL` missing or Postgres down | Check `.env`; verify Docker container |
 | Empty stream | AI returned non-SSE body | Check AI service logs; verify Contract C format |
-| `prisma db push` fails | `DATABASE_URL` not set or Postgres not reachable | Set `.env.local`; verify Docker container is running |
-| CORS error in browser | Gateway CORS misconfigured | Gateway allows `*` for dev by default |
+| `prisma db push` fails | `DATABASE_URL` not set or Postgres not reachable | Set `.env`; verify Docker container is running |
+| CORS error in browser | Gateway `ALLOWED_ORIGINS` misconfigured | Empty = wildcard `*` for dev; set explicit origin for production |
 | `user-role` not applied | Attribute set after element connect | Rely on `attributeChangedCallback` — it propagates changes at any time |
+| `401 Unauthorized` | `REQUIRE_AUTH=true` but no `auth-token` set | Set `auth-token` on the element or set `REQUIRE_AUTH=false` for local testing |
 
 ---
 

@@ -1,6 +1,6 @@
 # Gateway Service
 
-Next.js 16 API orchestration layer: **multi-tenant session tracking**, **PostgreSQL persistence via Prisma 7**, and **zero-copy SSE stream proxying** between the widget client and the AI microservice. It imports nothing from the widget or AI service modules — only the shared HTTP contracts define the coupling surface.
+Next.js 16 API orchestration layer: **multi-tenant session tracking**, **PostgreSQL persistence via Prisma 7**, **JWT authentication**, and **zero-copy SSE stream proxying** between the widget client and the AI microservice. It imports nothing from the widget or AI service modules — only the shared HTTP contracts define the coupling surface.
 
 ---
 
@@ -14,17 +14,19 @@ sequenceDiagram
   participant A as ai-service
 
   W->>G: POST /api/chat (Contract A)
+  G->>G: JWT verify (if REQUIRE_AUTH=true)
   G->>DB: prisma.session.upsert()
-  G->>DB: prisma.message.create() [role: user]
+  G->>DB: prisma.message.create() [role: "user"]
+  G->>G: fetch context_history (if ENABLE_AI_MEMORY=true)
   G->>A: POST /v1/chat/stream (Contract B)
   loop SSE passthrough
     A-->>G: Contract C chunk (raw bytes)
-    G-->>W: same bytes (TransformStream)
+    G-->>W: same bytes (TransformStream — zero buffering)
   end
-  G->>DB: prisma.message.create() [role: assistant, full text]
+  G->>DB: prisma.message.create() [role: "assistant", full assembled text]
 ```
 
-The gateway uses a `TransformStream` to forward raw SSE bytes to the widget **immediately** (zero buffering). In parallel, it accumulates the token payloads in memory. When the upstream stream ends, the `TransformStream.flush()` method persists the fully assembled assistant reply as a single `Message` row in Postgres.
+The gateway uses a `TransformStream` to forward raw SSE bytes to the widget **immediately** (zero buffering). In parallel, it accumulates token payloads in memory. When the upstream stream ends, `TransformStream.flush()` persists the fully assembled assistant reply as a single `Message` row in Postgres.
 
 ---
 
@@ -50,8 +52,6 @@ The gateway uses a `TransformStream` to forward raw SSE bytes to the widget **im
 ---
 
 ## Local PostgreSQL Setup (Docker)
-
-Spin up PostgreSQL 16 in a Docker container with a single command:
 
 ```powershell
 docker run --name gateway-postgres `
@@ -79,7 +79,7 @@ docker rm gateway-postgres
 
 ## Environment Variables
 
-Create a `.env.local` file in the `gateway-service` directory:
+Create a `.env` file in the `gateway-service` directory:
 
 ```env
 # PostgreSQL connection string (matches the Docker command above)
@@ -92,19 +92,19 @@ AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | — | **Required.** Full PostgreSQL connection string. Read by `prisma.config.ts`. |
-| `AI_SERVICE_URL` | `http://localhost:8000/v1/chat/stream` | Contract B endpoint forwarded to the AI service. |
+| `AI_SERVICE_URL` | — | **Required.** Contract B endpoint for the AI service. Use the intranet IP when services are on different hosts — do **not** use `localhost` in that case. |
 | `ENABLE_AI_MEMORY` | `true` | When `true`, fetches the last 5 conversation turns from Postgres and injects them into the Contract B `context_history` array. When `false`, always sends `context_history: []`. Does **not** affect the history API endpoints. |
-| `REQUIRE_AUTH` | `true` | When `true`, every `POST /api/chat` must include a valid `Authorization: Bearer <JWT>` header. When `false`, skips JWT verification and trusts the `userId` in the JSON body (dev / bypass mode). |
-| `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`  |
+| `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` and `GET /api/chat/history` require a valid `Authorization: Bearer <JWT>` header. When `false`, skips JWT verification and trusts `userId` in the JSON body (dev / bypass mode). |
+| `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `ALLOWED_ORIGINS` | `""` (wildcard `*`) | Comma-separated list of origins permitted for CORS. When empty, falls back to `*` (dev only). Example: `"http://localhost:5173,https://client.example.com"`. |
 
-> **Prisma 7 note:** Unlike Prisma 6 and earlier, the connection URL is configured in `prisma.config.ts` (not in `schema.prisma`). Next.js reads `.env.local` automatically, so `DATABASE_URL` is available to both the Next.js routes and the Prisma config at runtime.
+> **Prisma 7 note:** Unlike Prisma 6 and earlier, the connection URL is configured in `prisma.config.ts` (not in `schema.prisma`). Next.js reads `.env` automatically, so `DATABASE_URL` is available to both the Next.js routes and the Prisma config at runtime.
 
 ---
 
 ## Authentication — `REQUIRE_AUTH`
 
-The gateway implements an **optional JWT authentication layer** on `POST /api/chat`. The behaviour is controlled by the `REQUIRE_AUTH` environment variable.
+The gateway implements an **optional JWT authentication layer** on `POST /api/chat` and `GET /api/chat/history`. The behaviour is controlled by the `REQUIRE_AUTH` environment variable.
 
 ### Modes
 
@@ -125,9 +125,7 @@ The utility in `src/lib/auth.ts` uses Node.js's built-in `crypto` module — no 
 - **Claims checked:** `exp` (expiry, if present), `userId` or `sub` (user identity)
 - **Timing-safe comparison:** uses `crypto.timingSafeEqual` to prevent timing attacks
 
-### Bypassing auth for local testing (REQUIRE_AUTH=false)
-
-Set these two variables in `gateway-service/.env` to enable bypass mode:
+### Bypassing auth for local testing (`REQUIRE_AUTH=false`)
 
 ```env
 REQUIRE_AUTH=false
@@ -144,7 +142,7 @@ curl -X POST http://localhost:3000/api/chat `
   -d '{"sessionId":"sess_smoke","userId":"usr_test","role":"reviewer","message":"Hello"}'
 ```
 
-### Enabling auth for production (REQUIRE_AUTH=true)
+### Enabling auth for production (`REQUIRE_AUTH=true`)
 
 1. Generate a secret:
    ```powershell
@@ -157,20 +155,6 @@ curl -X POST http://localhost:3000/api/chat `
    ```
 3. Mint tokens in your auth provider using the same secret and HS256 algorithm. Include `userId` (or `sub`) as a claim.
 4. Pass the token to the widget via the `auth-token` HTML attribute (see [widget-client/README.md](../widget-client/README.md)).
-
-### Testing with a real token (curl)
-
-```powershell
-# Replace <TOKEN> with a valid HS256 JWT signed with JWT_SECRET
-curl -X POST http://localhost:3000/api/chat `
-  -H "Content-Type: application/json" `
-  -H "Accept: text/event-stream" `
-  -H "Authorization: Bearer <TOKEN>" `
-  -N `
-  -d '{"sessionId":"sess_smoke","role":"reviewer","message":"Hello"}'
-```
-
-> Note: in `REQUIRE_AUTH=true` mode you do **not** need to include `userId` in the body — it is extracted from the verified JWT.
 
 ### Auth step names in structured logs
 
@@ -198,8 +182,6 @@ Every CORS-enabled route (`OPTIONS` preflight and all standard responses) explic
 Access-Control-Allow-Headers: Content-Type, Authorization
 ```
 
-This allows the widget to send `Authorization: Bearer <JWT>` on cross-origin `GET` and `POST` requests without preflight failures.
-
 > [!WARNING]
 > Leaving `ALLOWED_ORIGINS` empty (wildcard `*`) in production means any web page can call this API from a browser. Always set explicit origins in production.
 
@@ -213,7 +195,7 @@ The gateway implements an **opt-in memory layer** that injects prior conversatio
 
 | `ENABLE_AI_MEMORY` | `context_history` in Contract B | History API (`GET /api/chat/history`) |
 |---|---|---|
-| `true` | Last 5 turns fetched from Postgres (≤10 messages) | **Always works** — reads directly from DB |
+| `true` | Last 5 turns fetched from Postgres (up to 10 messages) | **Always works** — reads directly from DB |
 | `false` | Always `[]` — AI has no memory of prior turns | **Always works** — reads directly from DB |
 
 > [!IMPORTANT]
@@ -222,20 +204,18 @@ The gateway implements an **opt-in memory layer** that injects prior conversatio
 > endpoints. Those endpoints always query Postgres, so the UI sidebar continues to display
 > all past sessions and messages regardless of this flag.
 
-### Memory window
+### Memory window (exact implementation)
 
-- The Gateway explicitly fetches the last 5 conversation turns (11 messages total) to prevent token overflow.
-- The current user message is sent as the `query` field and is **excluded** from
-  `context_history` to avoid duplication.
-- If the Prisma query for history fails, the gateway logs a `warn` and falls back
-  to `context_history: []` — the request still proceeds normally.
+The gateway fetches `MEMORY_TURNS * 2 + 1 = 11` messages from Postgres (ordered by `createdAt DESC`), then **drops the first row** (the current user message just inserted) via `slice(1)`, and reverses to chronological order. This yields at most **10 prior messages** (5 complete user+assistant turns) in `context_history`.
+
+The current user message is sent as the `query` field and is **excluded** from `context_history` to avoid duplication. If the Prisma query for history fails, the gateway logs a `warn` and falls back to `context_history: []` — the request still proceeds normally.
 
 ### Example Contract B payload with memory enabled
 
 ```json
 {
   "conversation_id": "sess_1748956800_abc123",
-  "role": "reviewer",
+  "role": "user",
   "query": "What did I ask about earlier?",
   "context_history": [
     { "role": "user",      "content": "Check Q2 compliance status." },
@@ -251,11 +231,25 @@ The gateway implements an **opt-in memory layer** that injects prior conversatio
 ```json
 {
   "conversation_id": "sess_1748956800_abc123",
-  "role": "reviewer",
+  "role": "user",
   "query": "What did I ask about earlier?",
   "context_history": []
 }
 ```
+
+---
+
+## Contract Translation
+
+| Contract A field (from widget) | Contract B field (to AI service) |
+|--------------------------------|----------------------------------|
+| `sessionId` | `conversation_id` |
+| `userId` | _(not forwarded — gateway-only)_ |
+| `role` | `role` — **hardcoded to `"user"`** regardless of the incoming widget role |
+| `message` | `query` |
+| — | `context_history` (last 5 turns when `ENABLE_AI_MEMORY=true`, else `[]`) |
+
+Contract C chunks are **not transformed** — forwarded byte-for-byte.
 
 ---
 
@@ -311,23 +305,13 @@ npm start
 
 CORS preflight handler. Responds `204 No Content`.
 
-The `Access-Control-Allow-Origin` header is set to the requesting origin only if it appears in `ALLOWED_ORIGINS`. When `ALLOWED_ORIGINS` is empty, the wildcard `*` is used (dev only).
-
-Allowed request headers: `Content-Type`, `Authorization`.
+The `Access-Control-Allow-Origin` header is set to the requesting origin only if it appears in `ALLOWED_ORIGINS`. When `ALLOWED_ORIGINS` is empty, the wildcard `*` is used (dev only). Allowed request headers: `Content-Type`, `Authorization`.
 
 ---
 
 ### `GET /api/health`
 
-AI service liveness proxy used by the widget on mount to verify the AI microservice is reachable before enabling chat input.
-
-**Request:**
-
-```
-GET /api/health
-```
-
-No request body. CORS headers match the other API routes (`Content-Type`, `Authorization` allowed).
+AI service liveness proxy. Used by the widget on mount as part of the dual health check to verify the AI microservice is reachable before enabling chat input.
 
 **Handler behaviour:**
 
@@ -346,8 +330,6 @@ No request body. CORS headers match the other API routes (`Content-Type`, `Autho
 ```json
 { "status": "error", "ai": "offline" }
 ```
-
-**Example:**
 
 ```powershell
 curl http://localhost:3000/api/health
@@ -373,20 +355,20 @@ The main stream proxy. Persists the user message, proxies the request to the AI 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `sessionId` | `string` | **Yes** | Client-generated session identifier |
-| `userId` | `string` | **Yes** | User identifier from the `user-id` HTML attribute |
-| `role` | `"user"` \| `"reviewer"` | **Yes** | Active persona; forwarded to the AI service |
+| `userId` | `string` | **Yes** (bypass mode) | User identifier. Ignored in auth mode — gateway reads `userId` from the JWT instead. |
+| `role` | `"user"` \| `"reviewer"` | **Yes** | Active persona. Stored in the session record. Hardcoded to `"user"` in Contract B. |
 | `message` | `string` | **Yes** | The user's message text |
 
 **Handler behaviour (in order):**
 
-1. Validates all four required fields; returns `400` on failure.
-2. `prisma.session.upsert({ where: { id: sessionId }, create: { id, userId, role, title }, update: { updatedAt } })` — creates the session on the first message, touches `updatedAt` on subsequent ones. Session `title` is derived as `message.slice(0, 30) + "..."`.
-3. `prisma.message.create({ data: { id, sessionId, role: "user", content: message } })` — persists the incoming user message.
-4. `fetch(AI_SERVICE_URL, { method: "POST", body: Contract B JSON })` — calls the AI service.
-5. Creates a `TransformStream` and starts `pump()` (a fire-and-forget async function) that pipes raw bytes from the AI response to the client in real time.
-6. Returns `new Response(readable, { headers: { "Content-Type": "text/event-stream", ... } })` immediately — the client starts receiving SSE tokens.
-7. When the upstream reader signals `done`, `pump()` closes the writer, which triggers `TransformStream.flush()`.
-8. Inside `flush()`: `prisma.message.create({ data: { role: "assistant", content: assembledText } })` — saves the full reply. Errors here are caught and logged non-fatally (the stream was already delivered).
+1. **Auth check** — if `REQUIRE_AUTH=true`, verifies the `Authorization: Bearer <JWT>` header. Returns `401` on failure.
+2. **Parse body** — validates all four required fields; returns `400` on failure.
+3. **Session upsert** — `prisma.session.upsert({ where: { id: sessionId }, create: { id, userId, role, title }, update: { updatedAt } })`. Session `title` is derived as `message.slice(0, 30) + "..."` on creation and never overwritten on subsequent messages.
+4. **User message persist** — `prisma.message.create({ data: { id, sessionId, role: "user", content: message } })`.
+5. **Memory fetch** — if `ENABLE_AI_MEMORY=true`, fetches up to 10 prior messages from Postgres for `context_history`.
+6. **AI service call** — `fetch(AI_SERVICE_URL, { method: "POST", body: Contract B JSON })`.
+7. **TransformStream proxy** — starts `pump()` (fire-and-forget) to pipe raw bytes from the AI response to the client in real time. Returns `new Response(readable, { headers: SSE_HEADERS })` immediately.
+8. **Assistant message persist** — inside `TransformStream.flush()`, after the stream ends: `prisma.message.create({ data: { role: "assistant", content: assembledText } })`. Errors here are non-fatal.
 
 **Response:** `200 OK` with `Content-Type: text/event-stream` (Contract C passthrough).
 
@@ -397,7 +379,7 @@ Content-Type: text/event-stream
 Cache-Control: no-cache, no-transform
 Connection: keep-alive
 X-Accel-Buffering: no
-Access-Control-Allow-Origin: <origin>   ← echoes the request origin if in ALLOWED_ORIGINS, else "*" in dev
+Access-Control-Allow-Origin: <origin>
 ```
 
 **Error responses:**
@@ -408,12 +390,15 @@ Access-Control-Allow-Origin: <origin>   ← echoes the request origin if in ALLO
 | `401` | Missing `Authorization` header, or JWT verification failed (only when `REQUIRE_AUTH=true`) |
 | `500` | Database error during session upsert or user message creation |
 | `502` | AI service unreachable or returned a non-`2xx` response |
+| `503` | `AI_SERVICE_URL` is not configured |
 
 ---
 
 ### `GET /api/chat/history?userId=<userId>`
 
 Returns all `Session` records for the given user, ordered by most recently updated first.
+
+> **Auth note:** When `REQUIRE_AUTH=true`, this endpoint also requires a valid `Authorization: Bearer <JWT>` header. A missing or invalid token returns `401`.
 
 **Request:**
 
@@ -443,8 +428,8 @@ GET /api/chat/history?userId=usr_abc123
 | `sessions` | `Session[]` | All sessions for the user, newest first |
 | `sessions[].id` | `string` | Session identifier |
 | `sessions[].userId` | `string` | The user who owns this session |
-| `sessions[].role` | `string` | `"user"` or `"reviewer"` |
-| `sessions[].title` | `string` | Auto-generated from the first message |
+| `sessions[].role` | `string` | `"user"` or `"reviewer"` — the widget role at session creation |
+| `sessions[].title` | `string \| null` | Auto-generated from the first 30 chars of the first message; `null` until first message is saved |
 | `sessions[].createdAt` | ISO 8601 | Creation timestamp |
 | `sessions[].updatedAt` | ISO 8601 | Last activity timestamp |
 
@@ -453,6 +438,7 @@ GET /api/chat/history?userId=usr_abc123
 | Status | Cause |
 |--------|-------|
 | `400` | Missing or empty `userId` query parameter |
+| `401` | Missing or invalid `Authorization` header (when `REQUIRE_AUTH=true`) |
 | `500` | Database error |
 
 ---
@@ -510,7 +496,7 @@ GET /api/chat/history/sess_1748956800_abc123
 
 ### `PATCH /api/chat/history/:sessionId`
 
-Updates the `title` of an existing session. Useful when the user renames a conversation in the UI.
+Updates the `title` of an existing session. Called by the widget when the user renames a conversation via the inline rename UI.
 
 **Request body:**
 
@@ -520,7 +506,7 @@ Updates the `title` of an existing session. Useful when the user renames a conve
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `title` | `string` | **Yes** | The new display title for the session (must be non-empty) |
+| `title` | `string` | **Yes** | The new display title for the session (must be non-empty after trimming) |
 
 **Response — `200 OK`:**
 
@@ -539,7 +525,7 @@ Updates the `title` of an existing session. Useful when the user renames a conve
 
 | Status | Cause |
 |--------|-------|
-| `400` | Missing or empty `title` field in request body, or invalid JSON |
+| `400` | Missing, empty, or non-string `title` field, or invalid JSON |
 | `404` | No session found with that ID |
 | `500` | Database error |
 
@@ -575,7 +561,9 @@ const pump = async () => {
       buffer += decoder.decode(value, { stream: true });
 
       // Parse SSE lines to accumulate the full assistant reply
-      for (const line of buffer.split("\n")) {
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
         const parsed = parseSseDataLine(line);
         if (parsed?.type === "token" && parsed.content) {
           assembledAssistantText += parsed.content;
@@ -588,7 +576,6 @@ const pump = async () => {
 };
 
 void pump();                               // fire-and-forget
-
 return new Response(readable, { headers: SSE_HEADERS });
 ```
 
@@ -598,20 +585,6 @@ Key properties of this design:
 - **Parallel accumulation** — the same bytes are decoded in the `pump()` loop to build the full reply string, without any blocking of the forward path.
 - **Async-safe `flush()`** — declared `async`, the Prisma `await` inside it is fully awaited. Errors are caught with `try/catch` and logged non-fatally.
 - **Node.js runtime** — `export const runtime = 'edge'` is deliberately absent. The standard Node.js runtime is required for `PrismaClient`.
-
----
-
-## Contract Translation
-
-| Contract A (widget) | Contract B (AI service) |
-|---------------------|------------------------|
-| `sessionId` | `conversation_id` |
-| `userId` | _(not forwarded — gateway-only)_ |
-| `role` | `role` — **hardcoded to `"user"`** (Contract B always receives `"user"`, regardless of the incoming widget role) |
-| `message` | `query` |
-| — | `context_history` (last 5 turns when `ENABLE_AI_MEMORY=true`, else `[]`) |
-
-Contract C chunks are **not transformed** — forwarded byte-for-byte.
 
 ---
 
@@ -631,19 +604,11 @@ All error and warning paths in `src/app/api/chat/route.ts` use the `logger` util
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `timestamp` | ISO-8601 UTC | When the event occurred |
-| `level` | `"info"` \| `"warn"` \| `"error"` | Severity |
-| `step` | `string` | Coarse-grained step name (see table below) |
-| `sessionId` | `string` | Active session ID (or `"unknown"`) |
-| `error` | `string` | Stringified error message |
-| _extra fields_ | `unknown` | Any additional key/value pairs (e.g. `aiDetail`) |
-
 ### Step names
 
 | `step` | Triggered by |
 |--------|--------------|
+| `auth_verify` | JWT signature check failure or missing `userId`/`sub` claim |
 | `db_upsert` | Prisma session upsert or user message creation failure |
 | `memory_fetch` | Prisma history query failure (warn level — request continues) |
 | `ai_fetch` | `fetch()` to the AI service throws (network error) |
@@ -661,8 +626,8 @@ All error and warning paths in `src/app/api/chat/route.ts` use the `logger` util
 |--------|------|-------------|-------------|
 | `id` | `String` | `@id` | Client-generated session identifier |
 | `userId` | `String` | indexed | User identifier from widget attribute |
-| `role` | `String` | | `"user"` or `"reviewer"` — stored for auditing; always sent as `"user"` to the AI service |
-| `title` | `String?` | nullable | Display title. Auto-derived from the first 30 chars of the first message on session creation; can be overwritten via `PATCH /api/chat/history/:sessionId`. `NULL` until first message is saved. |
+| `role` | `String` | | `"user"` or `"reviewer"` — stored for auditing; always sent as `"user"` to the AI service (Contract B) |
+| `title` | `String?` | nullable | Display title. Auto-derived from the first 30 chars of the first message on creation. Never overwritten by subsequent messages. Can be updated via `PATCH /api/chat/history/:sessionId`. `NULL` until first message is saved. |
 | `createdAt` | `DateTime` | `@default(now())` | Creation timestamp |
 | `updatedAt` | `DateTime` | `@updatedAt` | Auto-updated on every write |
 
@@ -712,17 +677,18 @@ gateway-service/
 ├── next.config.ts
 └── src/
     ├── lib/
+    │   ├── auth.ts            # JWT verification (HS256 via Node.js crypto — no third-party lib)
     │   ├── contracts.ts       # TypeScript types for Contracts A, B, C
     │   ├── logger.ts          # Structured JSON logging utility
-    │   ├── prisma.ts          # Singleton PrismaClient (hot-reload safe)
-    │   └── db/
-    │       └── schema.ts      # [DEPRECATED] — tombstone, do not import
+    │   └── prisma.ts          # Singleton PrismaClient (hot-reload safe)
     └── app/
         ├── layout.tsx
         ├── page.tsx
         └── api/
+            ├── health/
+            │   └── route.ts              # GET /api/health — AI service proxy probe
             └── chat/
-                ├── route.ts              # POST /api/chat — stream proxy + memory
+                ├── route.ts              # POST /api/chat — auth + stream proxy + memory
                 └── history/
                     ├── route.ts          # GET /api/chat/history?userId=
                     └── [sessionId]/
@@ -734,7 +700,7 @@ gateway-service/
 ## Testing Without the Widget
 
 ```powershell
-# POST a chat message and watch the SSE stream
+# POST a chat message (bypass mode) and watch the SSE stream
 curl -X POST http://localhost:3000/api/chat `
   -H "Content-Type: application/json" `
   -H "Accept: text/event-stream" `
@@ -746,6 +712,11 @@ curl "http://localhost:3000/api/chat/history?userId=usr_test"
 
 # Fetch all messages for a specific session
 curl "http://localhost:3000/api/chat/history/sess_smoke"
+
+# Rename a session
+curl -X PATCH http://localhost:3000/api/chat/history/sess_smoke `
+  -H "Content-Type: application/json" `
+  -d '{"title":"My Q2 Compliance Review"}'
 ```
 
 ---
