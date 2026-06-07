@@ -119,7 +119,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isSidebarOpen: false,
 
   // ── Gateway ───────────────────────────────────────────────────────────────
-  gatewayUrl: "http://localhost:3000/api/chat",
+  // Default is read from the VITE_GATEWAY_URL build-time env var.
+  // In production, set VITE_GATEWAY_URL=http://<GATEWAY_HOST_IP>:3000 in
+  // widget-client/.env (or .env.production) before running `npm run build`.
+  // The gateway-url HTML attribute always takes priority over this default.
+  gatewayUrl: import.meta.env.VITE_GATEWAY_URL
+    ? `${import.meta.env.VITE_GATEWAY_URL}/api/chat`
+    : "http://localhost:3000/api/chat",
 
   // ── Actions ───────────────────────────────────────────────────────────────
 

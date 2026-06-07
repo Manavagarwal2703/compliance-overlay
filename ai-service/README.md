@@ -11,7 +11,7 @@ sequenceDiagram
   participant G as gateway-service
   participant R as Semantic Router
   participant LLM as LLM (Groq / Azure)
-  participant C as ChromaDB (future)
+  participant C as ChromaDB (chroma_db/)
 
   G->>R: POST /v1/chat/stream (Contract B)
   R->>LLM: analyze_intent(query, context_history)
@@ -107,6 +107,10 @@ AZURE_OPENAI_API_VERSION=2024-08-01-preview
 AZURE_OPENAI_DEPLOYMENT_FAST=gpt-5-mini
 AZURE_OPENAI_DEPLOYMENT_RAG=gpt-4o-mini
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-large
+
+# --- RAG / ChromaDB ---
+CHROMA_PERSIST_DIR=./chroma_db
+ENABLE_CITATIONS=false
 ```
 
 ### Full Variable Reference
@@ -121,7 +125,9 @@ AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-large
 | `AZURE_OPENAI_API_VERSION` | `2024-08-01-preview` | No | API version string. |
 | `AZURE_OPENAI_DEPLOYMENT_FAST` | `gpt-5-mini` | No (if Azure) | Deployment name for the fast chat path. |
 | `AZURE_OPENAI_DEPLOYMENT_RAG` | `gpt-4o-mini` | No (if Azure) | Deployment name for the RAG path. |
-| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | No (if Azure) | Embedding deployment (reserved for Chroma RAG). |
+| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | No (if Azure) | Embedding deployment used by `ingest.py` when `USE_AZURE=true`. |
+| `CHROMA_PERSIST_DIR` | `./chroma_db` | No | Path (relative to `ai-service/`) where ChromaDB persists the vector store. |
+| `ENABLE_CITATIONS` | `false` | No | Set `true` to emit an SSE `sources` event listing source filenames before `done`. |
 
 `python-dotenv` is included in `requirements.txt`. `main.py` loads the `.env` file on startup automatically.
 
@@ -159,6 +165,90 @@ curl -X POST http://localhost:8000/v1/chat/stream `
 ```
 
 You should see streamed `data:` lines followed by `data: {"type": "done"}`.
+
+---
+
+## Data Ingestion
+
+Before the AI service can answer questions from your compliance documents, you must run the ingestion script to populate the local ChromaDB vector store.
+
+### Step 1 — Add your documents
+
+Create the `data/` directory inside `ai-service/` and copy your compliance documents into it:
+
+```powershell
+mkdir ai-service\data
+# Copy PDF or TXT files into ai-service\data\
+```
+
+Supported formats: `.pdf` (requires `pypdf`) and `.txt`.
+
+### Step 2 — Run `ingest.py`
+
+```powershell
+cd ai-service
+.\.venv\Scripts\Activate.ps1
+python -m app.ingest
+```
+
+Expected output:
+
+```
+10:30:00 [INFO] === ABB Compliance KB Ingestion ===
+10:30:00 [INFO] Step 1/4 — Loading documents...
+10:30:00 [INFO]   Loaded 'compliance_policy.pdf' (12 page(s)/chunk(s))
+10:30:01 [INFO] Step 2/4 — Splitting into chunks...
+10:30:01 [INFO]   Total chunks produced: 47
+10:30:01 [INFO] Step 3/4 — Building embedding model...
+10:30:01 [INFO] Embedding provider: FastEmbedEmbeddings (local, BAAI/bge-small-en-v1.5)
+10:30:03 [INFO] Step 4/4 — Persisting to ChromaDB...
+10:30:03 [INFO]   Upserted batch 1 (47 chunks, total so far: 47)
+10:30:03 [INFO] ✓ Ingestion complete — 47 chunks from 1 source file(s) stored in 'chroma_db/'.
+```
+
+The script is **idempotent** — re-running it deletes and recreates the collection cleanly. Run it whenever documents change.
+
+### Embedding Providers
+
+| `USE_AZURE` | Embedding Model | Notes |
+|-------------|----------------|-------|
+| `false` (default) | `FastEmbedEmbeddings` (`BAAI/bge-small-en-v1.5`) | Fully local, free. Downloads ~40 MB model on first run. Uses `onnxruntime` (already in `requirements.txt`). |
+| `true` | `AzureOpenAIEmbeddings` | Requires `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` to be set. |
+
+### `ENABLE_CITATIONS` Feature Flag
+
+When `ENABLE_CITATIONS=true`, the server emits an additional Contract C SSE event listing the filenames of the retrieved source chunks, **immediately before** the `done` event:
+
+```
+data: {"type": "token", "content": "Control AC-2 failed..."}
+data: {"type": "sources", "content": ["compliance_policy.pdf", "audit_guide.txt"]}
+data: {"type": "done"}
+```
+
+When `ENABLE_CITATIONS=false` (the default), the `sources` event is never emitted. This keeps Contract C backward-compatible: existing consumers that only handle `token` and `done` continue to work unchanged.
+
+---
+
+## ⚠️ Troubleshooting
+
+### `ChromaDB directory 'chroma_db' not found` in server logs
+
+This is **expected behaviour on a fresh clone** before ingestion has been run. The service starts successfully and handles general-chat queries normally, but any compliance/RAG query will fall back to an empty context and the LLM will respond with *"I do not have enough information…"*.
+
+**Fix:**
+
+```powershell
+# 1. Add at least one .pdf or .txt compliance document to ai-service\data\
+mkdir ai-service\data
+# (copy your documents into data\ here)
+
+# 2. Run the ingestion script
+cd ai-service
+.\.venv\Scripts\Activate.ps1
+python -m app.ingest
+```
+
+Once `ingest.py` completes, `chroma_db/` is created and the warning will no longer appear.
 
 ---
 
@@ -206,9 +296,9 @@ Liveness probe.
 **Contract C SSE events:**
 
 ```
-data: {"type": "token", "content": "Control AC-2 "}
-data: {"type": "token", "content": "failed due to "}
-data: {"type": "token", "content": "missing access reviews."}
+data: {"type": "token",   "content": "Control AC-2 "}
+data: {"type": "token",   "content": "failed due to missing access reviews."}
+data: {"type": "sources", "content": ["compliance_policy.pdf"]}   ← only if ENABLE_CITATIONS=true
 data: {"type": "done"}
 ```
 
@@ -238,15 +328,38 @@ If the query passes the guardrail, an LLM extracts the required context paramete
 - `needs_kb` (bool): Does the query require knowledge base data (policies, rules)?
 - `needs_report` (bool): Does it require compliance report data?
 - `controls_mentioned` (list[str]): Any specific controls mentioned (e.g., AC-2)?
+- `is_general_chat` (bool): Is the query a greeting, small talk, or a general knowledge question that has **no** compliance context? When `True` and neither `needs_kb` nor `needs_report` is set, the pipeline takes the **GENERAL_CHAT** fast path, skipping all fetchers.
 
-### Step 3: Pluggable Fetchers
+### Step 3: Context Fetchers (ChromaDB)
 
-Based on the extracted requirements, the pipeline concurrently executes async fetchers (`fetch_vector_kb` and `fetch_report_db`). 
-*Note: These are currently mocked and return placeholder strings with `# TODO` markers ready for ChromaDB and PostgreSQL integration.*
+Based on the extracted requirements, the pipeline concurrently executes async fetchers:
 
-### Step 4: Synthesizer
+- **`fetch_vector_kb(query)`** — performs a real **cosine-similarity search** against the ChromaDB collection populated by `app/ingest.py`. Returns the top-5 most relevant chunks as numbered context blocks, plus a list of source filenames for citations. Falls back gracefully with a warning if the collection has not been ingested yet.
+- **`fetch_report_db(controls)`** — placeholder for the structured compliance report database. Returns mock data; replace with a real PostgreSQL query when the report schema is finalised.
 
-The results from the fetchers are aggregated into a massive `SystemMessage` providing strict context to the LLM. Finally, the response is streamed back to the Gateway using `llm.astream()`, strictly adhering to the Contract C SSE format (`data: {"type": "token", "content": "..."}\n\n`).
+Both fetchers return a `FetchResult(context: str, sources: list[str])` dataclass.
+
+### Step 4: Synthesizer — Dynamic Prompting
+
+Based on the extraction result, the Synthesizer selects one of two system prompts before streaming the response:
+
+#### `GENERAL_CHAT` path — `is_general_chat = True` AND `needs_kb = False` AND `needs_report = False`
+
+The **General Intelligence** prompt is injected:
+
+> *"You are a helpful and intelligent AI assistant. Answer the user's general questions using your broad general knowledge…"*
+
+No context fetchers are executed, so this path has lower latency. The LLM answers from its pre-trained knowledge.
+
+#### `COMPLIANCE_RAG` path — all other cases
+
+The **Strict Compliance** prompt is injected with the aggregated context block from the fetchers:
+
+> *"You are a strict compliance assistant. You must ONLY use the provided context below…"*
+
+If no KB or report context is available (e.g. ChromaDB not yet ingested), the context block reads `"No external context was retrieved for this query."` and the LLM is still bounded to that strict posture.
+
+Finally, the response is streamed back to the Gateway using `llm.astream()`, strictly adhering to the Contract C SSE format (`data: {"type": "token", "content": "..."}\n\n`).
 
 ---
 
@@ -300,24 +413,28 @@ FastAPI validates the inbound Contract B request body against `ChatStreamRequest
 ai-service/
 ├── .env.example                   # Environment variable template
 ├── requirements.txt               # Pinned Python dependencies
+├── data/                          # ← place your .pdf/.txt compliance documents here
+├── chroma_db/                     # ← auto-created by ingest.py (git-ignored)
 └── app/
     ├── main.py                    # FastAPI app: /health + /v1/chat/stream
     ├── llm_factory.py             # get_llm() — Groq / Azure OpenAI factory
+    ├── ingest.py                  # Standalone ingestion script (run once before server start)
     ├── models/
-    │   └── contracts.py           # Pydantic Contract B models
+    │   └── contracts.py           # Pydantic Contract B + Contract C event docs
     └── routers/
-        └── semantic_router.py     # analyze_intent() + SSE stream handlers
+        └── semantic_router.py     # Context Aggregator Pipeline + ChromaDB retrieval
 ```
 
 ---
 
 ## Going to Production
 
-1. **Replace mock handlers** in `semantic_router.py` — swap `handle_report_query()` and `handle_kb_query()` mock responses with real database queries and `ChromaDB` retrieval calls. Stream the results via `get_llm(streaming=True).astream()`.
-2. **Keep Contract C shape identical** — the gateway and widget depend only on `{"type": "token", "content": "..."}` and `{"type": "done"}`. Internal routing changes are transparent to upstream consumers.
-3. **Keep this service internal** — the gateway calls it over a private network. Do not expose port `8000` publicly. CORS is not required on this service.
-4. **Log intent classifications** — `analyze_intent()` returns a `reasoning` string useful for audit trails and routing quality monitoring.
-5. **Add ChromaDB ingestion** — the `chromadb` package is already in `requirements.txt`. Wire up an `/ingest` endpoint for uploading compliance documents and policies.
+1. **Run ingestion before first start** — execute `python -m app.ingest` once (with `data/` populated) so `chroma_db/` exists before `uvicorn` starts.
+2. **Wire up the report database** — replace the mock `fetch_report_db()` in `semantic_router.py` with a real query against the gateway's PostgreSQL database (via an internal HTTP call or a shared read replica).
+3. **Set `ENABLE_CITATIONS`** — set `true` to surface source filenames in the UI; leave `false` for a cleaner chat experience without attribution.
+4. **Keep Contract C shape identical** — the gateway and widget depend only on `{"type": "token"}`, `{"type": "sources"}` (optional), and `{"type": "done"}`. Internal routing changes are transparent to upstream consumers.
+5. **Keep this service internal** — the gateway calls it over a private network. Do not expose port `8000` publicly. CORS is not required on this service.
+6. **Persist `chroma_db/` across deployments** — mount it as a Docker volume or on shared network storage so re-ingestion is not required on every container restart.
 
 ---
 

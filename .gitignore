@@ -1,4 +1,8 @@
-# ── Node / Next.js (gateway-service) ──────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# ABB Compliance Chatbot Overlay — root .gitignore
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Node / Next.js (gateway-service, widget-client) ───────────────────────────
 node_modules/
 .next/
 dist/
@@ -11,19 +15,45 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+.pytest_cache/
+
+# ── RAG / ChromaDB (ai-service) ───────────────────────────────────────────────
+# The vector store is generated at runtime by ingest.py — do not commit it.
+ai-service/chroma_db/
+# Compliance documents may be sensitive — exclude from source control.
+ai-service/data/
+# FastEmbed local model cache
+.fastembed_cache/
 
 # ── Environment variables & secrets ───────────────────────────────────────────
-# NEVER commit real .env files. Each module ships a .env.example as the template.
+# NEVER commit real .env files. Each module ships a .env.example template.
+# All of the following may contain real intranet IPs, API keys, or passwords.
 .env
 .env.local
 .env.production
 .env.production.local
 .env.development.local
+.env.staging
 
-# Explicitly keep example/template files so the team knows what vars are needed.
+# Explicitly KEEP the safe example/template files so the team knows what
+# variables are required in each environment.
 !.env.example
+
+# ── Build artefacts ───────────────────────────────────────────────────────────
+widget-client/dist/
+gateway-service/.next/
+gateway-service/prisma/migrations/*.sql.bak
 
 # ── OS artefacts ──────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ── IDE / Editor ──────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln

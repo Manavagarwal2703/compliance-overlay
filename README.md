@@ -60,7 +60,7 @@ flowchart TB
 |--------|------------|----------------|-------|
 | [widget-client](./widget-client/) | 5173 | Shadow DOM Web Component, chat UI, session history sidebar, SSE client. **Features input locking and a loading skeleton during extraction latency.** | React 19, Vite 6, Zustand 5, Tailwind CSS 3 |
 | [gateway-service](./gateway-service/) | 3000 | Session upsert, message persistence, SSE stream proxy | Next.js 16.1.4, Prisma 7, PostgreSQL |
-| [ai-service](./ai-service/) | 8000 | **Context Aggregator Pipeline**, Security Guardrails, entity extraction, RAG retrieval, LLM streaming | FastAPI, LangChain, Groq / Azure OpenAI |
+| [ai-service](./ai-service/) | 8000 | **Context Aggregator Pipeline**, Security Guardrails, entity extraction, dynamic prompting (**GENERAL_CHAT** path for greetings/general knowledge, **COMPLIANCE_RAG** path for policy/audit questions), ChromaDB RAG retrieval, LLM streaming | FastAPI, LangChain, Groq / Azure OpenAI |
 
 **Isolation rule:** No shared packages, no monorepo libs, no cross-folder imports. Integration is HTTP-contract-only.
 
@@ -74,7 +74,7 @@ These three contracts are the **only** coupling between modules. Changing any fi
 
 ### Contract A — Widget → Gateway
 
-**Endpoint:** `POST http://localhost:3000/api/chat`
+**Endpoint:** `POST http://<GATEWAY_HOST_IP>:3000/api/chat`
 
 ```json
 {
@@ -106,7 +106,7 @@ These three contracts are the **only** coupling between modules. Changing any fi
 
 ### Contract B — Gateway → AI Service
 
-**Endpoint:** `POST http://localhost:8000/v1/chat/stream`
+**Endpoint:** `POST http://<AI_SERVICE_HOST_IP>:8000/v1/chat/stream`
 
 ```json
 {
@@ -142,6 +142,7 @@ data: {"type": "done"}
 | `type` | Extra fields | Meaning |
 |--------|-------------|---------|
 | `token` | `content: string` | Incremental assistant text chunk |
+| `sources` | `content: string[]` | **Optional.** Deduplicated list of source filenames retrieved from ChromaDB. Only emitted when `ENABLE_CITATIONS=true` in the AI service. Always sent **before** `done`. |
 | `done` | — | Stream is complete; client should finalise the message |
 | `error` | `content?: string` | Stream failed; client should show an error state |
 
@@ -380,7 +381,9 @@ Serve the `dist/` folder from IIS, Nginx, or any intranet static file host. Then
 | Service | Variable | Default | Purpose |
 |---------|----------|---------|---------|
 | Gateway | `DATABASE_URL` | — | **Required.** PostgreSQL connection string |
-| Gateway | `AI_SERVICE_URL` | `http://localhost:8000/v1/chat/stream` | Contract B endpoint |
+| Gateway | `AI_SERVICE_URL` | — | **Required.** Full URL to ai-service `/v1/chat/stream`. Use intranet IP, not localhost. |
+| Gateway | `NEXT_PUBLIC_GATEWAY_URL` | — | Optional. Public base URL of this gateway (for self-referential links). |
+| Widget | `VITE_GATEWAY_URL` | `http://localhost:3000` | Base URL of the gateway, baked into the JS bundle at build time. Set before `npm run build`. |
 | AI | `GROQ_API_KEY` | `""` | Groq API key (required unless `USE_AZURE=true`) |
 | AI | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model name |
 | AI | `USE_AZURE` | `false` | Set `true` to use Azure OpenAI instead of Groq |
@@ -390,6 +393,8 @@ Serve the `dist/` folder from IIS, Nginx, or any intranet static file host. Then
 | AI | `AZURE_OPENAI_DEPLOYMENT_FAST` | `gpt-5-mini` | Fast chat deployment name |
 | AI | `AZURE_OPENAI_DEPLOYMENT_RAG` | `gpt-4o-mini` | RAG deployment name |
 | AI | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | Embedding deployment name |
+| AI | `CHROMA_PERSIST_DIR` | `./chroma_db` | Path (relative to `ai-service/`) where ChromaDB persists the vector store |
+| AI | `ENABLE_CITATIONS` | `false` | Set `true` to emit an SSE `sources` event with source filenames before `done` |
 
 See [ai-service/.env.example](./ai-service/.env.example) for the full template.
 
@@ -426,7 +431,7 @@ This produces `dist/compliance-chat-overlay.es.js` (ES module) and `dist/complia
 |-----------|----------|-------------|
 | `user-role` | **Yes** | `"user"` or `"reviewer"`. Controls AI routing. Read-only from inside the widget. |
 | `user-id` | **Yes** | Authenticated user's unique identifier. Sent in every Contract A request as `userId`. |
-| `gateway-url` | No | Override the Contract A endpoint (default: `http://localhost:3000/api/chat`) |
+| `gateway-url` | **Yes** (production) | Full URL to the gateway `/api/chat` endpoint, e.g. `http://192.168.1.100:3000/api/chat`. In dev the widget falls back to `VITE_GATEWAY_URL` from `.env`. |
 | `open` | No | `"true"` to open the chat panel immediately on mount |
 
 ---
@@ -440,9 +445,12 @@ ABB Chatbot Overlay/
 │   ├── README.md
 │   ├── .env.example
 │   ├── requirements.txt
+│   ├── data/                      ← place .pdf/.txt compliance documents here
+│   ├── chroma_db/                 ← auto-created by ingest.py (git-ignored)
 │   └── app/
 │       ├── main.py
 │       ├── llm_factory.py
+│       ├── ingest.py              ← standalone ingestion CLI (run before server start)
 │       ├── models/contracts.py
 │       └── routers/semantic_router.py
 ├── gateway-service/
@@ -483,6 +491,8 @@ ABB Chatbot Overlay/
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
+| AI returns "I do not have enough information" for compliance questions | `chroma_db/` not yet created | Add documents to `ai-service/data/` and run `python -m app.ingest`; see [ai-service README](./ai-service/README.md#️-troubleshooting) |
+| AI says "I do not have enough information" for "hi" or "what is AI" | Old code without general-chat path | Update to latest `semantic_router.py`; the `is_general_chat` extractor now routes greetings/general questions to a relaxed prompt |
 | Widget shows network error | Gateway not running or wrong `gateway-url` | Start gateway on `:3000`; verify attribute |
 | Gateway returns `502` | AI service down | Start `uvicorn` on `:8000` |
 | Gateway returns `500` | `DATABASE_URL` missing or Postgres down | Check `.env.local`; verify Docker container |

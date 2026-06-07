@@ -7,8 +7,12 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-const AI_SERVICE_URL =
-  process.env.AI_SERVICE_URL ?? "http://localhost:8000/v1/chat/stream";
+// AI_SERVICE_URL must be set to the intranet IP of the machine running the
+// ai-service process (e.g. http://192.168.1.50:8000/v1/chat/stream).
+// Do NOT use localhost unless the gateway and ai-service are on the same server.
+// If this variable is missing the route returns 503 immediately rather than
+// trying to reach a wrong host and producing a misleading 502.
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL;
 
 function parseSseDataLine(line: string): SseChunkPayload | null {
   const trimmed = line.trim();
@@ -97,6 +101,13 @@ export async function POST(request: Request): Promise<Response> {
   };
 
   // ── 4. Call AI service ─────────────────────────────────────────────────────
+  if (!AI_SERVICE_URL) {
+    return Response.json(
+      { error: "AI_SERVICE_URL is not configured. Set it in gateway-service/.env." },
+      { status: 503 }
+    );
+  }
+
   let aiResponse: Response;
   try {
     aiResponse = await fetch(AI_SERVICE_URL, {
