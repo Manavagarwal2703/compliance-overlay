@@ -93,8 +93,63 @@ AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
 |----------|---------|-------------|
 | `DATABASE_URL` | — | **Required.** Full PostgreSQL connection string. Read by `prisma.config.ts`. |
 | `AI_SERVICE_URL` | `http://localhost:8000/v1/chat/stream` | Contract B endpoint forwarded to the AI service. |
+| `ENABLE_AI_MEMORY` | `true` | When `true`, fetches the last 5 conversation turns from Postgres and injects them into the Contract B `context_history` array. When `false`, always sends `context_history: []`. Does **not** affect the history API endpoints. |
 
 > **Prisma 7 note:** Unlike Prisma 6 and earlier, the connection URL is configured in `prisma.config.ts` (not in `schema.prisma`). Next.js reads `.env.local` automatically, so `DATABASE_URL` is available to both the Next.js routes and the Prisma config at runtime.
+
+---
+
+## AI Memory — `ENABLE_AI_MEMORY`
+
+The gateway implements an **opt-in memory layer** that injects prior conversation turns into the Contract B payload so the AI service can maintain context across messages.
+
+### How it works
+
+| `ENABLE_AI_MEMORY` | `context_history` in Contract B | History API (`GET /api/chat/history`) |
+|---|---|---|
+| `true` | Last 5 turns fetched from Postgres (≤10 messages) | **Always works** — reads directly from DB |
+| `false` | Always `[]` — AI has no memory of prior turns | **Always works** — reads directly from DB |
+
+> [!IMPORTANT]
+> `ENABLE_AI_MEMORY` controls **only** the Contract B payload forwarded to the AI service.
+> It has zero effect on the `GET /api/chat/history` and `GET /api/chat/history/:sessionId`
+> endpoints. Those endpoints always query Postgres, so the UI sidebar continues to display
+> all past sessions and messages regardless of this flag.
+
+### Memory window
+
+- **5 turns** = up to 10 messages (alternating user/assistant) are included.
+- The current user message is sent as the `query` field and is **excluded** from
+  `context_history` to avoid duplication.
+- If the Prisma query for history fails, the gateway logs a `warn` and falls back
+  to `context_history: []` — the request still proceeds normally.
+
+### Example Contract B payload with memory enabled
+
+```json
+{
+  "conversation_id": "sess_1748956800_abc123",
+  "role": "reviewer",
+  "query": "What did I ask about earlier?",
+  "context_history": [
+    { "role": "user",      "content": "Check Q2 compliance status." },
+    { "role": "assistant", "content": "The Q2 status is fully compliant." },
+    { "role": "user",      "content": "Which controls were reviewed?" },
+    { "role": "assistant", "content": "Controls CC1–CC5 were reviewed." }
+  ]
+}
+```
+
+### Example Contract B payload with memory disabled
+
+```json
+{
+  "conversation_id": "sess_1748956800_abc123",
+  "role": "reviewer",
+  "query": "What did I ask about earlier?",
+  "context_history": []
+}
+```
 
 ---
 
@@ -368,9 +423,46 @@ Key properties of this design:
 | `userId` | _(not forwarded — gateway-only)_ |
 | `role` | `role` |
 | `message` | `query` |
-| — | `context_history` (empty array; history hydration TBD) |
+| — | `context_history` (last 5 turns when `ENABLE_AI_MEMORY=true`, else `[]`) |
 
 Contract C chunks are **not transformed** — forwarded byte-for-byte.
+
+---
+
+## Structured JSON Logging
+
+All error and warning paths in `src/app/api/chat/route.ts` use the `logger` utility in `src/lib/logger.ts` instead of plain `console.error`. Every log line is a **strict JSON object** written to the appropriate Node.js stream, making it compatible with log-aggregation pipelines (Loki, Datadog, Splunk, etc.).
+
+### Log shape
+
+```json
+{
+  "timestamp": "2026-06-07T21:00:00.000Z",
+  "level": "error",
+  "step": "ai_fetch",
+  "sessionId": "sess_1748956800_abc123",
+  "error": "connect ECONNREFUSED 127.0.0.1:8000"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | ISO-8601 UTC | When the event occurred |
+| `level` | `"info"` \| `"warn"` \| `"error"` | Severity |
+| `step` | `string` | Coarse-grained step name (see table below) |
+| `sessionId` | `string` | Active session ID (or `"unknown"`) |
+| `error` | `string` | Stringified error message |
+| _extra fields_ | `unknown` | Any additional key/value pairs (e.g. `aiDetail`) |
+
+### Step names
+
+| `step` | Triggered by |
+|--------|--------------|
+| `db_upsert` | Prisma session upsert or user message creation failure |
+| `memory_fetch` | Prisma history query failure (warn level — request continues) |
+| `ai_fetch` | `fetch()` to the AI service throws (network error) |
+| `ai_response` | AI service returns a non-2xx status |
+| `db_persist_assistant` | Prisma failure saving the assembled assistant reply (warn — stream already delivered) |
 
 ---
 
@@ -434,6 +526,7 @@ gateway-service/
 └── src/
     ├── lib/
     │   ├── contracts.ts       # TypeScript types for Contracts A, B, C
+    │   ├── logger.ts          # Structured JSON logging utility
     │   ├── prisma.ts          # Singleton PrismaClient (hot-reload safe)
     │   └── db/
     │       └── schema.ts      # [DEPRECATED] — tombstone, do not import
@@ -442,7 +535,7 @@ gateway-service/
         ├── page.tsx
         └── api/
             └── chat/
-                ├── route.ts              # POST /api/chat — stream proxy
+                ├── route.ts              # POST /api/chat — stream proxy + memory
                 └── history/
                     ├── route.ts          # GET /api/chat/history?userId=
                     └── [sessionId]/

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 import type { AiChatRequest, SseChunkPayload, WidgetChatRequest } from "@/lib/contracts";
 
 const CORS_HEADERS: Record<string, string> = {
@@ -13,6 +14,18 @@ const CORS_HEADERS: Record<string, string> = {
 // If this variable is missing the route returns 503 immediately rather than
 // trying to reach a wrong host and producing a misleading 502.
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL;
+
+// ENABLE_AI_MEMORY controls whether past messages are fetched from Postgres and
+// injected into the Contract B payload as context_history. When false, an empty
+// array is sent and the AI has no memory of prior turns. This flag does NOT
+// affect the GET /api/chat/history endpoints — those always read from the DB so
+// the UI sidebar continues to work regardless of this setting.
+const ENABLE_AI_MEMORY = process.env.ENABLE_AI_MEMORY === "true";
+
+// Number of conversation turns (user + assistant pairs) to include in
+// context_history when memory is enabled. Each turn = 2 messages, so 5 turns
+// = up to 10 messages fetched. Kept low to avoid hitting token limits.
+const MEMORY_TURNS = 5;
 
 function parseSseDataLine(line: string): SseChunkPayload | null {
   const trimmed = line.trim();
@@ -89,15 +102,66 @@ export async function POST(request: Request): Promise<Response> {
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : "Database error";
+    logger.error({
+      step: "db_upsert",
+      sessionId,
+      error: detail,
+    });
     return Response.json({ error: "Failed to persist message", detail }, { status: 500 });
   }
 
   // ── 3. Build AI service payload (Contract B) ───────────────────────────────
+  //
+  // context_history shape: [{ role: "user" | "assistant", content: string }]
+  //
+  // When ENABLE_AI_MEMORY is true we load the last MEMORY_TURNS conversation
+  // turns (user + assistant pairs) from Postgres. The newly saved user message
+  // is excluded because the AI receives it as the `query` field separately.
+  //
+  // When ENABLE_AI_MEMORY is false we send an empty array, meaning the AI
+  // service treats every request as a fresh conversation. The history endpoints
+  // are unaffected — the UI sidebar always reads from the database.
+  //
+  let contextHistory: AiChatRequest["context_history"] = [];
+
+  if (ENABLE_AI_MEMORY) {
+    try {
+      // Fetch the most recent messages for this session (excluding the message
+      // we just saved, which is the current user turn).
+      const recentMessages = await prisma.message.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: "desc" },
+        // Fetch MEMORY_TURNS * 2 messages (each turn = 1 user + 1 assistant),
+        // plus 1 extra to account for the user message we just inserted.
+        take: MEMORY_TURNS * 2 + 1,
+        select: { role: true, content: true, createdAt: true },
+      });
+
+      // The most recently inserted row is the current user message — drop it
+      // so it is not duplicated in context_history.
+      const history = recentMessages.slice(1);
+
+      // Reverse to restore chronological order (oldest → newest).
+      contextHistory = history.reverse().map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
+    } catch (err) {
+      // Non-fatal: fall back to empty context so the request still proceeds.
+      logger.warn({
+        step: "memory_fetch",
+        sessionId,
+        error: err instanceof Error ? err.message : "Failed to fetch context history",
+      });
+      contextHistory = [];
+    }
+  }
+
   const aiPayload: AiChatRequest = {
     conversation_id: sessionId,
     role,
     query: message,
-    context_history: [],
+    context_history: contextHistory,
   };
 
   // ── 4. Call AI service ─────────────────────────────────────────────────────
@@ -120,11 +184,22 @@ export async function POST(request: Request): Promise<Response> {
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : "AI service unreachable";
+    logger.error({
+      step: "ai_fetch",
+      sessionId,
+      error: detail,
+    });
     return Response.json({ error: detail }, { status: 502 });
   }
 
   if (!aiResponse.ok || !aiResponse.body) {
     const text = await aiResponse.text().catch(() => "");
+    logger.error({
+      step: "ai_response",
+      sessionId,
+      error: `AI service returned ${aiResponse.status}`,
+      aiDetail: text,
+    });
     return Response.json(
       { error: "AI service error", detail: text },
       { status: aiResponse.status || 502 }
@@ -156,10 +231,14 @@ export async function POST(request: Request): Promise<Response> {
               content: assembledAssistantText.trim(),
             },
           });
-        } catch {
+        } catch (err) {
           // Non-fatal: the stream has already been delivered to the client.
           // Log and continue — the session is still usable.
-          console.error("[gateway] Failed to persist assistant message for session", sessionId);
+          logger.error({
+            step: "db_persist_assistant",
+            sessionId,
+            error: err instanceof Error ? err.message : "Failed to persist assistant message",
+          });
         }
       }
     },
