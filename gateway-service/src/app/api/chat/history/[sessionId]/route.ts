@@ -1,14 +1,37 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, PATCH, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
+// ── CORS ────────────────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS: Set<string> = (() => {
+  const raw = process.env.ALLOWED_ORIGINS ?? "";
+  const list = raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  return new Set(list);
+})();
 
-export async function OPTIONS(): Promise<Response> {
-  return new Response(null, { status: 204, headers: CORS_HEADERS });
+function buildCorsHeaders(requestOrigin: string | null): Record<string, string> {
+  let allowedOrigin: string;
+  if (ALLOWED_ORIGINS.size === 0) {
+    allowedOrigin = "*";
+  } else if (requestOrigin && ALLOWED_ORIGINS.has(requestOrigin)) {
+    allowedOrigin = requestOrigin;
+  } else {
+    allowedOrigin = "null";
+  }
+
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "GET, PATCH, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    ...(allowedOrigin !== "*" ? { "Access-Control-Allow-Credentials": "true" } : {}),
+  };
+}
+
+export async function OPTIONS(request: Request): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  return new Response(null, { status: 204, headers: buildCorsHeaders(origin) });
 }
 
 /**
@@ -41,15 +64,18 @@ export async function OPTIONS(): Promise<Response> {
  * 404 { "error": "Session not found" }
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ sessionId: string }> }
 ): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  const corsHeaders = buildCorsHeaders(origin);
+
   const { sessionId } = await params;
 
   if (!sessionId) {
     return Response.json(
       { error: "sessionId path parameter is required" },
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers: corsHeaders }
     );
   }
 
@@ -63,7 +89,7 @@ export async function GET(
     if (!session) {
       return Response.json(
         { error: "Session not found" },
-        { status: 404, headers: CORS_HEADERS }
+        { status: 404, headers: corsHeaders }
       );
     }
 
@@ -79,12 +105,12 @@ export async function GET(
       },
     });
 
-    return Response.json({ sessionId, messages }, { headers: CORS_HEADERS });
+    return Response.json({ sessionId, messages }, { headers: corsHeaders });
   } catch (err) {
     const detail = err instanceof Error ? err.message : "Database error";
     return Response.json(
       { error: "Failed to fetch messages", detail },
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500, headers: corsHeaders }
     );
   }
 }
@@ -116,6 +142,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ sessionId: string }> }
 ): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  const corsHeaders = buildCorsHeaders(origin);
+
   const { sessionId } = await params;
 
   // ── Parse and validate request body ────────────────────────────────────────
@@ -125,7 +154,7 @@ export async function PATCH(
   } catch {
     return Response.json(
       { error: "Invalid JSON body" },
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers: corsHeaders }
     );
   }
 
@@ -139,7 +168,7 @@ export async function PATCH(
   if (typeof title !== "string" || title.trim() === "") {
     return Response.json(
       { error: "Request body must contain a non-empty string field: title" },
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers: corsHeaders }
     );
   }
 
@@ -153,7 +182,7 @@ export async function PATCH(
     if (!existing) {
       return Response.json(
         { error: "Session not found" },
-        { status: 404, headers: CORS_HEADERS }
+        { status: 404, headers: corsHeaders }
       );
     }
 
@@ -162,7 +191,7 @@ export async function PATCH(
       data: { title: title.trim() },
     });
 
-    return Response.json(updated, { status: 200, headers: CORS_HEADERS });
+    return Response.json(updated, { status: 200, headers: corsHeaders });
   } catch (err) {
     const detail = err instanceof Error ? err.message : "Database error";
     logger.error({
@@ -172,7 +201,7 @@ export async function PATCH(
     });
     return Response.json(
       { error: "Failed to update session title", detail },
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500, headers: corsHeaders }
     );
   }
 }

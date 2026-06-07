@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { extractUserNameFromJwt } from "../utils/jwt";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,10 +32,14 @@ export type ChatSession = {
   updatedAt: string;
 };
 
+export type SystemStatus = "connecting" | "online" | "offline" | "unauthorized";
+
 type ChatState = {
   // ── Identity (injected by host via HTML attributes) ──────────────────────
   userId: string;
   userRole: ChatRole;
+  /** Display name extracted from JWT payload (name, userName, userId, or sub). */
+  userName: string | null;
 
   // ── Widget visibility ─────────────────────────────────────────────────────
   isOpen: boolean;
@@ -48,6 +53,8 @@ type ChatState = {
   // ── Session history (sidebar) ─────────────────────────────────────────────
   sessions: ChatSession[];
   isSidebarOpen: boolean;
+  /** Aggregated gateway + AI availability; drives header dot and input lock. */
+  systemStatus: SystemStatus;
 
   // ── Gateway ─────────────────────────────────────────────────────────────────
   gatewayUrl: string;
@@ -82,11 +89,20 @@ type ChatState = {
   /** Fetch message history for a session and replace the active messages. */
   loadSession: (sessionId: string) => Promise<void>;
 
+  /** Alias for loadSession — fetches messages for a session with auth + userId. */
+  fetchSessionMessages: (sessionId: string) => Promise<void>;
+
   /** Fetch the list of sessions for a user and populate the sidebar. */
   loadSessions: (userId: string) => Promise<void>;
 
   /** Fetch history for the current user (reads userId from store). */
   fetchHistory: () => Promise<void>;
+
+  /**
+   * Dual health check on mount: verifies DB (history) and AI service (/api/health).
+   * Sets systemStatus and hydrates the session sidebar when both probes succeed.
+   */
+  initializeSystem: () => Promise<void>;
 
   /**
    * PATCH /api/chat/history/[sessionId] with the new title.
@@ -116,6 +132,21 @@ function generateId(): string {
 
 function generateSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function resolveUserId(userId: string): string {
+  return userId || "dev_user_001";
+}
+
+function getGatewayBase(gatewayUrl: string): string {
+  const stripped = gatewayUrl.replace(/\/api\/chat\/?$/, "");
+  if (stripped) return stripped;
+  return import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:3000";
+}
+
+function buildAuthHeaders(authToken: string | null): HeadersInit {
+  if (!authToken) return {};
+  return { Authorization: `Bearer ${authToken}` };
 }
 
 /** Derive a sidebar title from the first user message (only when title is null). */
@@ -165,6 +196,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // ── Identity ──────────────────────────────────────────────────────────────
   userId: "",
   userRole: "user",
+  userName: null,
 
   // ── Widget visibility ─────────────────────────────────────────────────────
   isOpen: false,
@@ -178,6 +210,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // ── Session history ───────────────────────────────────────────────────────
   sessions: [],
   isSidebarOpen: false,
+  systemStatus: "connecting",
 
   // ── Auth ──────────────────────────────────────────────────────────────────────
   authToken: null,
@@ -197,7 +230,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
 
-  setAuthToken: (token) => set({ authToken: token }),
+  setAuthToken: (token) =>
+    set({
+      authToken: token,
+      userName: token ? extractUserNameFromJwt(token) : null,
+    }),
 
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
 
@@ -228,18 +265,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
-  loadSession: async (sessionId) => {
-    set({ activeSessionId: sessionId, messages: [], error: null, isSidebarOpen: false });
+  fetchSessionMessages: async (sessionId) => {
+    const { userId, authToken, gatewayUrl } = get();
+    const effectiveUserId = resolveUserId(userId);
+    const gatewayBase = getGatewayBase(gatewayUrl);
+
+    set({
+      activeSessionId: sessionId,
+      messages: [],
+      error: null,
+      isSidebarOpen: false,
+    });
+
     try {
-      const gatewayBase =
-        import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:3000";
       const res = await fetch(
-        `${gatewayBase}/api/chat/history/${sessionId}`
+        `${gatewayBase}/api/chat/history/${sessionId}?userId=${encodeURIComponent(effectiveUserId)}`,
+        { headers: buildAuthHeaders(authToken) }
       );
       if (!res.ok) throw new Error(`History fetch failed: ${res.status}`);
-      // API returns { sessionId, messages: [...] } — destructure the envelope
-      const data: { sessionId: string; messages: Array<{ id: string; role: string; content: string; createdAt: string }> } =
-        await res.json();
+      const data: {
+        sessionId: string;
+        messages: Array<{
+          id: string;
+          role: string;
+          content: string;
+          createdAt: string;
+        }>;
+      } = await res.json();
       const messages: ChatMessage[] = (data.messages ?? []).map((m) => ({
         id: m.id,
         role: m.role as ChatMessage["role"],
@@ -252,18 +304,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  loadSession: async (sessionId) => {
+    await get().fetchSessionMessages(sessionId);
+  },
+
   loadSessions: async (userId) => {
-    if (!userId) return;
+    const { authToken, gatewayUrl } = get();
+    const effectiveUserId = resolveUserId(userId);
+    const gatewayBase = getGatewayBase(gatewayUrl);
+
     try {
-      const gatewayBase =
-        import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:3000";
       const res = await fetch(
-        `${gatewayBase}/api/chat/history?userId=${encodeURIComponent(userId)}`
+        `${gatewayBase}/api/chat/history?userId=${encodeURIComponent(effectiveUserId)}`,
+        { headers: buildAuthHeaders(authToken) }
       );
-      if (!res.ok) return; // silently ignore — sidebar will just stay empty
-      // API returns { sessions: [...] }
-      const data: { sessions: Array<{ id: string; title: string | null; updatedAt: string }> } =
-        await res.json();
+      if (!res.ok) return;
+      const data: {
+        sessions: Array<{ id: string; title: string | null; updatedAt: string }>;
+      } = await res.json();
       const sessions: ChatSession[] = (data.sessions ?? []).map((s) => ({
         id: s.id,
         title: s.title ?? null,
@@ -272,12 +330,59 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
       set({ sessions });
     } catch {
-      // Non-fatal: sidebar just shows no history
+      // Non-fatal — initializeSystem owns connectivity status.
     }
   },
 
   fetchHistory: async () => {
-    await get().loadSessions(get().userId);
+    const { userId } = get();
+    await get().loadSessions(resolveUserId(userId));
+  },
+
+  initializeSystem: async () => {
+    const { userId, authToken, gatewayUrl } = get();
+    const effectiveUserId = resolveUserId(userId);
+    const gatewayBase = getGatewayBase(gatewayUrl);
+
+    set({ systemStatus: "connecting" });
+
+    const [historyResult, healthResult] = await Promise.allSettled([
+      fetch(
+        `${gatewayBase}/api/chat/history?userId=${encodeURIComponent(effectiveUserId)}`,
+        { headers: buildAuthHeaders(authToken) }
+      ),
+      fetch(`${gatewayBase}/api/health`, {
+        headers: buildAuthHeaders(authToken),
+      }),
+    ]);
+
+    const historyResponse =
+      historyResult.status === "fulfilled" ? historyResult.value : null;
+    const healthResponse =
+      healthResult.status === "fulfilled" ? healthResult.value : null;
+
+    if (historyResponse?.status === 401) {
+      set({ systemStatus: "unauthorized" });
+      return;
+    }
+
+    if (historyResponse?.status !== 200 || healthResponse?.status !== 200) {
+      set({ systemStatus: "offline" });
+      return;
+    }
+
+    const data: {
+      sessions: Array<{ id: string; title: string | null; updatedAt: string }>;
+    } = await historyResponse.json();
+
+    const sessions: ChatSession[] = (data.sessions ?? []).map((s) => ({
+      id: s.id,
+      title: s.title ?? null,
+      date: s.updatedAt.slice(0, 10),
+      updatedAt: s.updatedAt,
+    }));
+
+    set({ sessions, systemStatus: "online" });
   },
 
   renameSession: async (sessionId, newTitle) => {

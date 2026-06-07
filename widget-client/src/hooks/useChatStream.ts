@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useChatStore } from "../store/useChatStore";
+import { formatApiError } from "../utils/apiError";
 
 type SsePayload = {
   type: "token" | "done" | "error" | "sources";
@@ -72,7 +73,7 @@ export function useChatStream() {
 
         if (!response.ok) {
           const errBody = await response.text().catch(() => "");
-          throw new Error(errBody || `Gateway error ${response.status}`);
+          throw new Error(formatApiError(response.status, errBody));
         }
 
         if (!response.body) {
@@ -108,7 +109,12 @@ export function useChatStream() {
               finishStream();
             }
             if (parsed.type === "error") {
-              throw new Error(typeof parsed.content === "string" ? parsed.content : "Stream error");
+              const errContent =
+                typeof parsed.content === "string" ? parsed.content : "Stream error";
+              if (/unauthorized/i.test(errContent)) {
+                throw new Error("Authentication failed. Please check your session.");
+              }
+              throw new Error(errContent);
             }
           }
         }
@@ -122,7 +128,19 @@ export function useChatStream() {
 
         finishStream();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to send message";
+        let msg = err instanceof Error ? err.message : "Failed to send message";
+        if (/^\s*\{/.test(msg)) {
+          try {
+            const parsed = JSON.parse(msg) as { error?: unknown };
+            if (typeof parsed.error === "string") {
+              msg = /unauthorized/i.test(parsed.error)
+                ? "Authentication failed. Please check your session."
+                : parsed.error;
+            }
+          } catch {
+            // keep original message
+          }
+        }
         setError(msg);
         finishStream();
       }

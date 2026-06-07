@@ -1,13 +1,39 @@
 import { prisma } from "@/lib/prisma";
+import { verifyJwt } from "@/lib/auth";
 
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
+const REQUIRE_AUTH = process.env.REQUIRE_AUTH !== "false";
 
-export async function OPTIONS(): Promise<Response> {
-  return new Response(null, { status: 204, headers: CORS_HEADERS });
+// ── CORS ────────────────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS: Set<string> = (() => {
+  const raw = process.env.ALLOWED_ORIGINS ?? "";
+  const list = raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  return new Set(list);
+})();
+
+function buildCorsHeaders(requestOrigin: string | null): Record<string, string> {
+  let allowedOrigin: string;
+  if (ALLOWED_ORIGINS.size === 0) {
+    allowedOrigin = "*";
+  } else if (requestOrigin && ALLOWED_ORIGINS.has(requestOrigin)) {
+    allowedOrigin = requestOrigin;
+  } else {
+    allowedOrigin = "null";
+  }
+
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    ...(allowedOrigin !== "*" ? { "Access-Control-Allow-Credentials": "true" } : {}),
+  };
+}
+
+export async function OPTIONS(request: Request): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  return new Response(null, { status: 204, headers: buildCorsHeaders(origin) });
 }
 
 /**
@@ -31,13 +57,35 @@ export async function OPTIONS(): Promise<Response> {
  * }
  */
 export async function GET(request: Request): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  const corsHeaders = buildCorsHeaders(origin);
+
+  if (REQUIRE_AUTH) {
+    const authHeader = request.headers.get("Authorization") ?? "";
+    if (!authHeader.startsWith("Bearer ")) {
+      return Response.json(
+        { error: "Unauthorized" },
+        { status: 401, headers: corsHeaders }
+      );
+    }
+    const token = authHeader.slice(7).trim();
+    try {
+      verifyJwt(token);
+    } catch (err) {
+      return Response.json(
+        { error: "Unauthorized" },
+        { status: 401, headers: corsHeaders }
+      );
+    }
+  }
+
   const { searchParams } = new URL(request.url);
   const userId = searchParams.get("userId");
 
   if (!userId || userId.trim() === "") {
     return Response.json(
       { error: "userId query parameter is required" },
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers: corsHeaders }
     );
   }
 
@@ -55,12 +103,12 @@ export async function GET(request: Request): Promise<Response> {
       },
     });
 
-    return Response.json({ sessions }, { headers: CORS_HEADERS });
+    return Response.json({ sessions }, { headers: corsHeaders });
   } catch (err) {
     const detail = err instanceof Error ? err.message : "Database error";
     return Response.json(
       { error: "Failed to fetch sessions", detail },
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500, headers: corsHeaders }
     );
   }
 }

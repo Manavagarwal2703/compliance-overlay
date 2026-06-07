@@ -192,6 +192,14 @@ The gateway dynamically computes the `Access-Control-Allow-Origin` response head
 
 When a specific (non-wildcard) origin is set, the gateway also returns `Access-Control-Allow-Credentials: true`, enabling browsers to send cookies alongside the `Authorization` header.
 
+Every CORS-enabled route (`OPTIONS` preflight and all standard responses) explicitly sets:
+
+```
+Access-Control-Allow-Headers: Content-Type, Authorization
+```
+
+This allows the widget to send `Authorization: Bearer <JWT>` on cross-origin `GET` and `POST` requests without preflight failures.
+
 > [!WARNING]
 > Leaving `ALLOWED_ORIGINS` empty (wildcard `*`) in production means any web page can call this API from a browser. Always set explicit origins in production.
 
@@ -304,6 +312,46 @@ npm start
 CORS preflight handler. Responds `204 No Content`.
 
 The `Access-Control-Allow-Origin` header is set to the requesting origin only if it appears in `ALLOWED_ORIGINS`. When `ALLOWED_ORIGINS` is empty, the wildcard `*` is used (dev only).
+
+Allowed request headers: `Content-Type`, `Authorization`.
+
+---
+
+### `GET /api/health`
+
+AI service liveness proxy used by the widget on mount to verify the AI microservice is reachable before enabling chat input.
+
+**Request:**
+
+```
+GET /api/health
+```
+
+No request body. CORS headers match the other API routes (`Content-Type`, `Authorization` allowed).
+
+**Handler behaviour:**
+
+1. Derives the upstream probe URL from `AI_SERVICE_URL` by taking the origin and appending `/health` (e.g. `http://192.168.1.50:8000/v1/chat/stream` → `http://192.168.1.50:8000/health`).
+2. `fetch()` the upstream `/health` endpoint with a 5-second timeout.
+3. Returns `200` when the upstream responds OK; `503` when `AI_SERVICE_URL` is unset, the fetch fails, times out, or the upstream returns a non-2xx status.
+
+**Response — AI online (`200 OK`):**
+
+```json
+{ "status": "ok", "ai": "online" }
+```
+
+**Response — AI offline (`503 Service Unavailable`):**
+
+```json
+{ "status": "error", "ai": "offline" }
+```
+
+**Example:**
+
+```powershell
+curl http://localhost:3000/api/health
+```
 
 ---
 

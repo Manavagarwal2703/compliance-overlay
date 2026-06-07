@@ -15,7 +15,11 @@ import {
   Pencil,
   Check,
 } from "lucide-react";
-import { useChatStore, ChatSession } from "../store/useChatStore";
+import {
+  useChatStore,
+  ChatSession,
+  type SystemStatus,
+} from "../store/useChatStore";
 import { useChatStream } from "../hooks/useChatStream";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +83,12 @@ function resolveTitle(session: ChatSession): string {
   if (session.title && session.title.trim().length > 0) return session.title;
   return "New Chat";
 }
+
+const EMPTY_SUGGESTIONS = [
+  "What is our cybersecurity policy?",
+  "Check Q2 Compliance.",
+  "Why did control AC-2 fail?",
+] as const;
 
 // ---------------------------------------------------------------------------
 // Sub-component: Individual session item with inline rename
@@ -223,8 +233,9 @@ function ChatSidebar() {
   const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
   const loadSession = useChatStore((s) => s.loadSession);
   const newSession = useChatStore((s) => s.newSession);
-  const userRole = useChatStore((s) => s.userRole);
-  const userId = useChatStore((s) => s.userId);
+  const userName = useChatStore((s) => s.userName);
+
+  const displayName = userName || "You";
 
   const groups = groupSessionsByDate(sessions);
 
@@ -265,23 +276,14 @@ function ChatSidebar() {
         </div>
 
         {/* Identity badge */}
-        {(userId || userRole) && (
-          <div className="mx-3 mt-3 flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-abb-primary/20 text-abb-primary">
-              {userRole === "reviewer" ? (
-                <Shield className="h-3.5 w-3.5" />
-              ) : (
-                <User className="h-3.5 w-3.5" />
-              )}
-            </div>
-            <div className="min-w-0">
-              <p className="truncate text-xs font-medium text-white">
-                {userId || "Anonymous"}
-              </p>
-              <p className="text-[10px] capitalize text-white/50">{userRole}</p>
-            </div>
+        <div className="mx-3 mt-3 flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-abb-primary/20 text-abb-primary">
+            <User className="h-3.5 w-3.5" />
           </div>
-        )}
+          <div className="min-w-0">
+            <p className="truncate text-xs font-medium text-white">{displayName}</p>
+          </div>
+        </div>
 
         {/* New Chat button */}
         <div className="px-3 pt-3">
@@ -332,26 +334,56 @@ function ChatSidebar() {
   );
 }
 
+function inputPlaceholderForStatus(status: SystemStatus): string {
+  switch (status) {
+    case "connecting":
+      return "Connecting to Compliance Assistant...";
+    case "online":
+      return "Type your question...";
+    case "unauthorized":
+      return "Chat disabled: Authentication failed.";
+    case "offline":
+      return "Service temporarily unavailable.";
+  }
+}
+
+function statusDotClass(status: SystemStatus): string {
+  switch (status) {
+    case "connecting":
+      return "animate-pulse bg-amber-400";
+    case "online":
+      return "animate-pulse bg-green-500";
+    case "offline":
+    case "unauthorized":
+      return "bg-red-500";
+  }
+}
+
+function statusLabel(status: SystemStatus): string {
+  switch (status) {
+    case "connecting":
+      return "Connecting";
+    case "online":
+      return "Online";
+    case "unauthorized":
+      return "Unauthorized";
+    case "offline":
+      return "Offline";
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Sub-component: Role badge shown in the header (read-only, from props)
+// Sub-component: Backend connectivity indicator (header)
 // ---------------------------------------------------------------------------
-function RoleBadge() {
-  const userRole = useChatStore((s) => s.userRole);
+function OnlineIndicator() {
+  const systemStatus = useChatStore((s) => s.systemStatus);
+
   return (
     <span
-      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-        userRole === "reviewer"
-          ? "bg-amber-400/20 text-amber-300"
-          : "bg-abb-primary/20 text-abb-primary"
-      }`}
-    >
-      {userRole === "reviewer" ? (
-        <Shield className="h-2.5 w-2.5" />
-      ) : (
-        <User className="h-2.5 w-2.5" />
-      )}
-      {userRole}
-    </span>
+      className={`inline-block h-2 w-2 shrink-0 rounded-full ${statusDotClass(systemStatus)}`}
+      title={statusLabel(systemStatus)}
+      aria-label={`System status: ${statusLabel(systemStatus)}`}
+    />
   );
 }
 
@@ -360,22 +392,27 @@ function RoleBadge() {
 // ---------------------------------------------------------------------------
 export function ChatWidget() {
   const isOpen = useChatStore((s) => s.isOpen);
-  const userRole = useChatStore((s) => s.userRole);
+  const userName = useChatStore((s) => s.userName);
   const messages = useChatStore((s) => s.messages);
   const error = useChatStore((s) => s.error);
   const toggleOpen = useChatStore((s) => s.toggleOpen);
   const toggleSidebar = useChatStore((s) => s.toggleSidebar);
   const newSession = useChatStore((s) => s.newSession);
-  const fetchHistory = useChatStore((s) => s.fetchHistory);
+  const initializeSystem = useChatStore((s) => s.initializeSystem);
+  const systemStatus = useChatStore((s) => s.systemStatus);
   const { sendMessage, isStreaming } = useChatStream();
+
+  const chatEnabled = systemStatus === "online";
+
+  const displayName = userName || "You";
 
   const [input, setInput] = useState("");
   const feedRef = useRef<HTMLDivElement>(null);
 
-  // Hydrate sidebar history once on mount
+  // Dual health check (DB + AI) once on mount
   useEffect(() => {
-    void fetchHistory();
-  }, [fetchHistory]);
+    void initializeSystem();
+  }, [initializeSystem]);
 
   // Auto-scroll to newest message
   useEffect(() => {
@@ -386,10 +423,18 @@ export function ChatWidget() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!chatEnabled) return;
     const text = input.trim();
     if (!text) return;
     setInput("");
     await sendMessage(text);
+  };
+
+  const handleSuggestionClick = async (text: string) => {
+    if (isStreaming || !chatEnabled) return;
+    setInput(text);
+    await sendMessage(text);
+    setInput("");
   };
 
   return (
@@ -426,13 +471,11 @@ export function ChatWidget() {
               </button>
 
               <Shield className="h-5 w-5 text-abb-primary" />
+              <OnlineIndicator />
               <span className="font-semibold">Compliance Assistant</span>
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Read-only role indicator */}
-              <RoleBadge />
-
               {/* New Chat shortcut */}
               <button
                 type="button"
@@ -462,39 +505,56 @@ export function ChatWidget() {
             className="flex-1 space-y-3 overflow-y-auto bg-abb-surface p-4"
           >
             {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center gap-2 pt-8 text-center">
+              <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-4 px-2 text-center">
                 <div className="flex h-12 w-12 items-center justify-center rounded-full bg-abb-primary/10">
                   <MessageSquare className="h-6 w-6 text-abb-primary" />
                 </div>
                 <p className="text-xs font-medium text-slate-500">
-                  {userRole === "reviewer"
-                    ? "Run a compliance check or ask about audit findings."
-                    : "Ask about compliance, policies, or audits."}
+                  Ask about compliance, policies, or audits.
                 </p>
+                <div className="flex flex-col items-center gap-2">
+                  {EMPTY_SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      disabled={isStreaming || !chatEnabled}
+                      onClick={() => void handleSuggestionClick(suggestion)}
+                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm transition hover:border-abb-primary/40 hover:bg-abb-primary/5 hover:text-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
-            {messages.map((msg) => (
+            {messages.map((msg) => {
+              const isAssistant = msg.role === "assistant";
+              const senderLabel = isAssistant ? "Compliance Assistant" : displayName;
+
+              return (
               <div
                 key={msg.id}
                 className={`flex ${
-                  msg.role === "assistant" ? "justify-start" : "justify-end"
+                  isAssistant ? "justify-start" : "justify-end"
                 }`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3 py-2 ${
-                    msg.role === "assistant"
-                      ? "bg-white text-slate-800 shadow-sm"
-                      : msg.role === "reviewer"
-                        ? "bg-amber-100 text-amber-900"
-                        : "bg-abb-primary text-white"
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 ${
+                    isAssistant
+                      ? "border border-slate-200 bg-white text-slate-800 shadow-sm"
+                      : "border border-abb-primary/20 bg-abb-primary text-white shadow-md"
                   }`}
                 >
-                  <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide opacity-60">
-                    {msg.role}
+                  <span
+                    className={`mb-1 block text-[10px] font-semibold tracking-wide ${
+                      isAssistant ? "text-slate-400" : "text-white/70"
+                    }`}
+                  >
+                    {senderLabel}
                   </span>
                   <p className="whitespace-pre-wrap break-words">
-                    {msg.role === "assistant" && msg.isStreaming && !msg.content ? (
+                    {isAssistant && msg.isStreaming && !msg.content ? (
                       <span className="flex h-5 items-center gap-1.5">
                         <span className="block h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:-0.3s]"></span>
                         <span className="block h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400 [animation-delay:-0.15s]"></span>
@@ -511,7 +571,7 @@ export function ChatWidget() {
                   </p>
 
                   {/* ── RAG Citation Pills ── */}
-                  {msg.role === "assistant" &&
+                  {isAssistant &&
                     msg.sources &&
                     msg.sources.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
@@ -532,7 +592,8 @@ export function ChatWidget() {
                     )}
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
 
           {/* ── Error banner ────────────────────────────────────────────── */}
@@ -552,17 +613,13 @@ export function ChatWidget() {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={
-                userRole === "reviewer"
-                  ? "Run compliance check…"
-                  : "Type your question…"
-              }
-              disabled={isStreaming}
+              placeholder={inputPlaceholderForStatus(systemStatus)}
+              disabled={!chatEnabled || isStreaming}
               className="flex-1 rounded-xl border border-slate-200 bg-abb-surface px-3 py-2 text-sm outline-none focus:border-abb-primary focus:ring-1 focus:ring-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={isStreaming || !input.trim()}
+              disabled={!chatEnabled || isStreaming || !input.trim()}
               className="flex h-10 w-10 items-center justify-center rounded-xl bg-abb-primary text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
               aria-label="Send message"
             >

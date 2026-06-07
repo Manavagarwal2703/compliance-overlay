@@ -141,15 +141,17 @@ widget.setAttribute('open', 'true');
 ## UI Features
 
 - **Floating launcher button** (bottom-right corner) — hidden when the panel is open.
-- **Read-only role badge** in the panel header — shows the `user-role` attribute value; no manual toggle in the UI.
+- **System status indicator** — a small circular dot next to the "Compliance Assistant" header title, driven by `systemStatus` in Zustand. **Connecting** pulses amber; **online** pulses green; **offline** or **unauthorized** is solid red. Updated once on mount via `initializeSystem()`.
 - **Chat History sidebar** — collapsible drawer grouping past sessions into **Today**, **Previous 7 Days**, and **Older** sections. Empty groups are not rendered.
 - **Inline session rename** — hover any session row to reveal a pencil icon. Clicking it replaces the title text with a small `<input>`. Press **Enter** or click away to save; press **Esc** to cancel.
 - **New Chat button** — available in the sidebar header and as a shortcut in the main header; archives the current session before creating a fresh one.
 - **Session switching** — clicking a past session in the sidebar loads its message history from the gateway API.
-- **Identity badge** — sidebar footer displays the current `user-id` and `user-role`.
+- **Identity badge** — sidebar displays the user's display name extracted from the JWT (see below), falling back to **"You"** when no name is available.
+- **Empty state suggestion pills** — when `messages.length === 0`, three clickable starter prompts appear centered in the chat area: *"What is our cybersecurity policy?"*, *"Check Q2 Compliance."*, and *"Why did control AC-2 fail?"*. Clicking a pill immediately sends that message.
 - **Streaming message feed** — animated blinking cursor while the assistant is composing a reply.
-- **Error banner** — displayed on gateway or network failures with the error message.
+- **Error banner** — displayed on gateway or network failures with a human-readable message. Auth errors (`401 Unauthorized`) show *"Authentication failed. Please check your session."* instead of raw JSON.
 - **Input locked during streaming** — the send button and input field are disabled while an SSE stream is active, preventing double-sends.
+- **Input locked when system is not online** — the text input and send button are fully disabled whenever `systemStatus !== 'online'`. The placeholder updates to reflect the current state (connecting, auth failure, or service outage).
 
 ---
 
@@ -164,6 +166,57 @@ Both of these features rely seamlessly on the centralized `isStreaming` boolean 
 
 ---
 
+## JWT Display Name Extraction
+
+When the `auth-token` HTML attribute is set, the Web Component decodes the JWT **payload** (middle segment) using standard Base64 decoding — no external JWT library required. The decoded JSON is scanned for a display name in this priority order:
+
+1. `name`
+2. `userName`
+3. `userId`
+4. `sub`
+
+The first string value found is stored in the Zustand `userName` field via `setAuthToken()`. This name is shown:
+
+- In the **sidebar identity badge** (replacing hardcoded "Anonymous" / "User")
+- As the **sender label** on human message bubbles (fallback: **"You"**)
+
+Implementation: `src/utils/jwt.ts` (`decodeJwtPayload`, `extractUserNameFromJwt`).
+
+> **Security note:** Payload decoding is for **display only**. Authentication is enforced by the gateway when verifying the Bearer token on each request.
+
+---
+
+## System Status Engine
+
+On mount, `ChatWidget` calls `initializeSystem()` exactly once. This runs a `Promise.allSettled` against **two** gateway endpoints:
+
+| Probe | Endpoint | Verifies |
+|---|---|---|
+| Database | `GET /api/chat/history?userId=…` | Gateway + Postgres connectivity |
+| AI service | `GET /api/health` | AI microservice liveness (via gateway proxy) |
+
+Both requests include `?userId=${userId || 'dev_user_001'}` (history only) and an `Authorization: Bearer <token>` header when `auth-token` is present.
+
+### Evaluation logic
+
+| Condition | `systemStatus` |
+|---|---|
+| Either probe returns `401` | `unauthorized` |
+| Health probe fails **or** history fails (network error, `5xx`) | `offline` |
+| **Both** probes succeed (history may be an empty `[]`) | `online` |
+| Before probes complete | `connecting` (default on load) |
+
+### UI effects
+
+| `systemStatus` | Header dot | Input placeholder | Input / send enabled |
+|---|---|---|---|
+| `connecting` | Pulsing amber | "Connecting to Compliance Assistant..." | No |
+| `online` | Pulsing green | "Type your question..." | Yes (unless streaming) |
+| `unauthorized` | Solid red | "Chat disabled: Authentication failed." | No |
+| `offline` | Solid red | "Service temporarily unavailable." | No |
+
+---
+
 ## State Architecture — Zustand (`src/store/useChatStore.ts`)
 
 The entire widget state lives in a single flat Zustand store. There is no React Context, no prop drilling, and no external state management dependency beyond Zustand itself.
@@ -173,7 +226,8 @@ The entire widget state lives in a single flat Zustand store. There is no React 
 | Field | Type | Set by | Description |
 |-------|------|--------|-------------|
 | `userId` | `string` | `initUser()` | Mirrors the `user-id` HTML attribute |
-| `userRole` | `"user"` \| `"reviewer"` | `initUser()` | Mirrors the `user-role` HTML attribute |
+| `userRole` | `"user"` \| `"reviewer"` | `initUser()` | Mirrors the `user-role` HTML attribute (used for backend routing only — not shown in UI) |
+| `userName` | `string \| null` | `setAuthToken()` | Display name extracted from JWT payload; `null` when no token or no name claim |
 
 ### Widget Visibility
 
@@ -197,6 +251,7 @@ The entire widget state lives in a single flat Zustand store. There is no React 
 |-------|------|-------------|
 | `sessions` | `ChatSession[]` | Past sessions, newest first |
 | `isSidebarOpen` | `boolean` | Controls the history drawer visibility |
+| `systemStatus` | `"connecting"` \| `"online"` \| `"offline"` \| `"unauthorized"` | Aggregated gateway + AI availability; drives header dot and input lock. Defaults to `"connecting"`. |
 
 #### `ChatSession` type
 
@@ -236,7 +291,11 @@ type ChatMessage = {
 | `toggleSidebar` | `() => void` | Toggles the history sidebar drawer. |
 | `setSidebarOpen` | `(bool) => void` | Explicitly open or close the sidebar. |
 | `newSession` | `() => void` | Archives the current session into `sessions[]` (title = first user message, up to 48 chars), then creates a fresh `activeSessionId` and clears `messages`. |
-| `setActiveSession` | `(sessionId) => void` | Sets `activeSessionId` and clears `messages`. This is the API integration point — add a `GET /api/chat/history/:sessionId` fetch here to hydrate messages. |
+| `setActiveSession` | `(sessionId) => void` | Sets `activeSessionId` and clears `messages` without fetching from the API. |
+| `loadSession` | `(sessionId) => Promise<void>` | Fetches `GET /api/chat/history/:sessionId?userId=…` and hydrates messages. Delegates to `fetchSessionMessages`. |
+| `fetchSessionMessages` | `(sessionId) => Promise<void>` | Same as `loadSession` — passes `userId` query param and auth headers. |
+| `fetchHistory` | `() => Promise<void>` | Fetches session list for current user (`userId || 'dev_user_001'`) without updating `systemStatus`. |
+| `initializeSystem` | `() => Promise<void>` | Dual health check on mount: `GET /api/chat/history` + `GET /api/health`. Sets `systemStatus` and hydrates `sessions` when both succeed. |
 | `addUserMessage` | `(content) => string` | Appends a `{ role: userRole, content }` message; returns the generated ID. |
 | `startAssistantMessage` | `() => string` | Appends an empty streaming assistant message; returns its ID. |
 | `appendStreamToken` | `(token) => void` | Appends a token string to the last assistant message's `content`. |
@@ -391,6 +450,9 @@ widget-client/
     ├── index.css               # Tailwind directives + :host { all: initial }
     ├── store/
     │   └── useChatStore.ts     # Zustand store — identity, sessions, messages, actions
+    ├── utils/
+    │   ├── jwt.ts              # JWT payload Base64 decode + display name extraction
+    │   └── apiError.ts         # Human-readable error formatting (401 → session message)
     ├── hooks/
     │   └── useChatStream.ts    # Contract A POST + Contract C SSE parsing
     └── components/
