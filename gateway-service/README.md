@@ -460,6 +460,43 @@ GET /api/chat/history/sess_1748956800_abc123
 
 ---
 
+### `PATCH /api/chat/history/:sessionId`
+
+Updates the `title` of an existing session. Useful when the user renames a conversation in the UI.
+
+**Request body:**
+
+```json
+{ "title": "New Session Name" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | `string` | **Yes** | The new display title for the session (must be non-empty) |
+
+**Response — `200 OK`:**
+
+```json
+{
+  "id": "sess_1748956800_abc123",
+  "userId": "usr_abc123",
+  "role": "user",
+  "title": "New Session Name",
+  "createdAt": "2026-06-03T10:30:00.000Z",
+  "updatedAt": "2026-06-07T18:00:00.000Z"
+}
+```
+
+**Error responses:**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Missing or empty `title` field in request body, or invalid JSON |
+| `404` | No session found with that ID |
+| `500` | Database error |
+
+---
+
 ## TransformStream Proxy — Deep Dive
 
 The streaming proxy in `src/app/api/chat/route.ts` satisfies two competing requirements simultaneously: **minimum latency** to the client and **complete persistence** of the AI reply.
@@ -522,7 +559,7 @@ Key properties of this design:
 |---------------------|------------------------|
 | `sessionId` | `conversation_id` |
 | `userId` | _(not forwarded — gateway-only)_ |
-| `role` | `role` |
+| `role` | `role` — **hardcoded to `"user"`** (Contract B always receives `"user"`, regardless of the incoming widget role) |
 | `message` | `query` |
 | — | `context_history` (last 5 turns when `ENABLE_AI_MEMORY=true`, else `[]`) |
 
@@ -564,6 +601,7 @@ All error and warning paths in `src/app/api/chat/route.ts` use the `logger` util
 | `ai_fetch` | `fetch()` to the AI service throws (network error) |
 | `ai_response` | AI service returns a non-2xx status |
 | `db_persist_assistant` | Prisma failure saving the assembled assistant reply (warn — stream already delivered) |
+| `db_update_session_title` | Prisma failure updating the session title via `PATCH` |
 
 ---
 
@@ -575,8 +613,8 @@ All error and warning paths in `src/app/api/chat/route.ts` use the `logger` util
 |--------|------|-------------|-------------|
 | `id` | `String` | `@id` | Client-generated session identifier |
 | `userId` | `String` | indexed | User identifier from widget attribute |
-| `role` | `String` | | `"user"` or `"reviewer"` |
-| `title` | `String` | | First 30 chars of first message + `"..."` |
+| `role` | `String` | | `"user"` or `"reviewer"` — stored for auditing; always sent as `"user"` to the AI service |
+| `title` | `String?` | nullable | Display title. Auto-derived from the first 30 chars of the first message on session creation; can be overwritten via `PATCH /api/chat/history/:sessionId`. `NULL` until first message is saved. |
 | `createdAt` | `DateTime` | `@default(now())` | Creation timestamp |
 | `updatedAt` | `DateTime` | `@updatedAt` | Auto-updated on every write |
 
@@ -640,7 +678,7 @@ gateway-service/
                 └── history/
                     ├── route.ts          # GET /api/chat/history?userId=
                     └── [sessionId]/
-                        └── route.ts     # GET /api/chat/history/:sessionId
+                        └── route.ts     # GET + PATCH /api/chat/history/:sessionId
 ```
 
 ---

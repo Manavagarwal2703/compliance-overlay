@@ -23,8 +23,12 @@ export type ChatMessage = {
  */
 export type ChatSession = {
   id: string;
-  title: string;
-  date: string; // ISO date string, e.g. "2026-06-03"
+  /** Custom title set by the user via inline rename, or null if not yet named. */
+  title: string | null;
+  /** ISO date string used for sidebar date grouping, e.g. "2026-06-03". */
+  date: string;
+  /** Full ISO timestamp of last activity — used for precise group bucketing. */
+  updatedAt: string;
 };
 
 type ChatState = {
@@ -69,7 +73,7 @@ type ChatState = {
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
 
-  /** Clear messages and start a fresh session; archives the previous one. */
+  /** Clear messages and start a fresh session (no sidebar entry until first message). */
   newSession: () => void;
 
   /** Switch the active session (UI only — messages are not loaded here). */
@@ -80,6 +84,16 @@ type ChatState = {
 
   /** Fetch the list of sessions for a user and populate the sidebar. */
   loadSessions: (userId: string) => Promise<void>;
+
+  /** Fetch history for the current user (reads userId from store). */
+  fetchHistory: () => Promise<void>;
+
+  /**
+   * PATCH /api/chat/history/[sessionId] with the new title.
+   * Optimistically updates the local `sessions` array so the UI reflects the
+   * change instantly; rolls back on network failure.
+   */
+  renameSession: (sessionId: string, newTitle: string) => Promise<void>;
 
   addUserMessage: (content: string) => string;
   startAssistantMessage: () => string;
@@ -104,8 +118,41 @@ function generateSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+/** Derive a sidebar title from the first user message (only when title is null). */
+function titleFromFirstMessage(content: string): string {
+  return (
+    content.slice(0, 48) + (content.length > 48 ? "…" : "")
+  );
+}
+
+/** Upsert the active session into the sidebar list after a user sends a message. */
+function upsertSessionOnMessage(
+  sessions: ChatSession[],
+  sessionId: string,
+  messageContent: string
+): ChatSession[] {
+  const now = new Date().toISOString();
+  const date = now.slice(0, 10);
+  const existing = sessions.find((s) => s.id === sessionId);
+
+  if (existing) {
+    const updated: ChatSession = {
+      ...existing,
+      date,
+      updatedAt: now,
+    };
+    return [updated, ...sessions.filter((s) => s.id !== sessionId)];
+  }
+
+  // New session — title is null, so apply the first-message fallback once.
+  const created: ChatSession = {
+    id: sessionId,
+    title: titleFromFirstMessage(messageContent),
+    date,
+    updatedAt: now,
+  };
+
+  return [created, ...sessions];
 }
 
 // ---------------------------------------------------------------------------
@@ -161,32 +208,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSidebarOpen: (open) => set({ isSidebarOpen: open }),
 
   newSession: () => {
-    const { messages, activeSessionId, sessions } = get();
-
-    // Archive current session into history if it had any messages
-    let updatedSessions = sessions;
-    if (messages.length > 0) {
-      const firstUserMsg = messages.find((m) => m.role !== "assistant");
-      const title = firstUserMsg
-        ? firstUserMsg.content.slice(0, 48) +
-          (firstUserMsg.content.length > 48 ? "…" : "")
-        : `Session ${activeSessionId.slice(-6)}`;
-
-      const archived: ChatSession = {
-        id: activeSessionId,
-        title,
-        date: todayIso(),
-      };
-      // Prepend to sessions so newest is on top
-      updatedSessions = [archived, ...sessions];
-    }
-
     set({
       activeSessionId: generateSessionId(),
       messages: [],
       error: null,
       isStreaming: false,
-      sessions: updatedSessions,
       isSidebarOpen: false,
     });
   },
@@ -236,16 +262,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
       );
       if (!res.ok) return; // silently ignore — sidebar will just stay empty
       // API returns { sessions: [...] }
-      const data: { sessions: Array<{ id: string; title: string; updatedAt: string }> } =
+      const data: { sessions: Array<{ id: string; title: string | null; updatedAt: string }> } =
         await res.json();
       const sessions: ChatSession[] = (data.sessions ?? []).map((s) => ({
         id: s.id,
-        title: s.title,
+        title: s.title ?? null,
         date: s.updatedAt.slice(0, 10),
+        updatedAt: s.updatedAt,
       }));
       set({ sessions });
     } catch {
       // Non-fatal: sidebar just shows no history
+    }
+  },
+
+  fetchHistory: async () => {
+    await get().loadSessions(get().userId);
+  },
+
+  renameSession: async (sessionId, newTitle) => {
+    const { sessions } = get();
+
+    // Optimistic update — reflect change in UI immediately
+    const previous = sessions;
+    set({
+      sessions: sessions.map((s) =>
+        s.id === sessionId ? { ...s, title: newTitle } : s
+      ),
+    });
+
+    try {
+      const gatewayBase =
+        import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:3000";
+      const res = await fetch(
+        `${gatewayBase}/api/chat/history/${sessionId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: newTitle }),
+        }
+      );
+      if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+    } catch (err) {
+      // Roll back optimistic update on failure
+      set({ sessions: previous });
+      const msg = err instanceof Error ? err.message : "Rename failed";
+      set({ error: msg });
     }
   },
 
@@ -256,6 +318,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...s.messages,
         { id, role: s.userRole, content },
       ],
+      sessions: upsertSessionOnMessage(s.sessions, s.activeSessionId, content),
     }));
     return id;
   },

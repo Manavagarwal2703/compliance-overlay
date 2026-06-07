@@ -1,4 +1,4 @@
-import { FormEvent, useRef, useEffect, useState } from "react";
+import { FormEvent, useRef, useEffect, useState, KeyboardEvent } from "react";
 import {
   MessageSquare,
   X,
@@ -12,26 +12,209 @@ import {
   ChevronRight,
   User,
   BookOpen,
+  Pencil,
+  Check,
 } from "lucide-react";
-import { useChatStore } from "../store/useChatStore";
+import { useChatStore, ChatSession } from "../store/useChatStore";
 import { useChatStream } from "../hooks/useChatStream";
 
 // ---------------------------------------------------------------------------
-// Helper — format an ISO date string into a human-friendly label
+// Helper — date grouping
 // ---------------------------------------------------------------------------
-function formatSessionDate(iso: string): string {
-  const date = new Date(iso);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
 
-  if (iso === today.toISOString().slice(0, 10)) return "Today";
-  if (iso === yesterday.toISOString().slice(0, 10)) return "Yesterday";
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+/** Returns today's ISO date string, e.g. "2026-06-07". */
+function todayDateStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Returns the ISO date string for N days ago. */
+function daysAgoDateStr(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+type SessionGroup = {
+  label: "Today" | "Previous 7 Days" | "Older";
+  sessions: ChatSession[];
+};
+
+/**
+ * Groups sessions into three buckets based on their `date` field (ISO date):
+ * - "Today"            — date === today
+ * - "Previous 7 Days"  — within the last 7 days but not today
+ * - "Older"            — everything else
+ *
+ * Empty groups are omitted from the returned array.
+ */
+function groupSessionsByDate(sessions: ChatSession[]): SessionGroup[] {
+  const today = todayDateStr();
+  const sevenDaysAgo = daysAgoDateStr(7);
+
+  const groups: Record<SessionGroup["label"], ChatSession[]> = {
+    Today: [],
+    "Previous 7 Days": [],
+    Older: [],
+  };
+
+  for (const s of sessions) {
+    if (s.date === today) {
+      groups["Today"].push(s);
+    } else if (s.date >= sevenDaysAgo) {
+      groups["Previous 7 Days"].push(s);
+    } else {
+      groups["Older"].push(s);
+    }
+  }
+
+  return (["Today", "Previous 7 Days", "Older"] as const)
+    .filter((label) => groups[label].length > 0)
+    .map((label) => ({ label, sessions: groups[label] }));
 }
 
 // ---------------------------------------------------------------------------
-// Sub-component: Chat History Sidebar
+// Helper — resolve a display title for a session
+// ---------------------------------------------------------------------------
+function resolveTitle(session: ChatSession): string {
+  if (session.title && session.title.trim().length > 0) return session.title;
+  return "New Chat";
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Individual session item with inline rename
+// ---------------------------------------------------------------------------
+interface SessionItemProps {
+  session: ChatSession;
+  isActive: boolean;
+  onSelect: () => void;
+}
+
+function SessionItem({ session, isActive, onSelect }: SessionItemProps) {
+  const renameSession = useChatStore((s) => s.renameSession);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const displayTitle = resolveTitle(session);
+
+  function startEditing(e: React.MouseEvent) {
+    e.stopPropagation(); // don't trigger session load
+    setDraft(displayTitle === "New Chat" ? "" : displayTitle);
+    setIsEditing(true);
+  }
+
+  // Focus the input as soon as it mounts
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isEditing]);
+
+  function commit() {
+    const trimmed = draft.trim();
+    setIsEditing(false);
+    if (trimmed && trimmed !== displayTitle) {
+      void renameSession(session.id, trimmed);
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      setIsEditing(false);
+    }
+  }
+
+  return (
+    <li className="group/item">
+      {isEditing ? (
+        /* ── Inline rename input ── */
+        <div className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2">
+          <MessageSquare className="h-3.5 w-3.5 shrink-0 text-abb-primary" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={handleKeyDown}
+            placeholder="Session name…"
+            className="min-w-0 flex-1 bg-transparent text-xs font-medium text-white outline-none placeholder:text-white/30 focus:outline-none"
+          />
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault(); // prevent blur before click
+              commit();
+            }}
+            className="shrink-0 rounded p-0.5 text-abb-primary hover:bg-white/10"
+            aria-label="Save name"
+          >
+            <Check className="h-3 w-3" />
+          </button>
+        </div>
+      ) : (
+        /* ── Normal session row ── */
+        <button
+          type="button"
+          onClick={onSelect}
+          className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left transition ${
+            isActive
+              ? "bg-white/15 text-white"
+              : "text-white/60 hover:bg-white/8 hover:text-white"
+          }`}
+        >
+          <MessageSquare
+            className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
+              isActive
+                ? "text-abb-primary"
+                : "text-white/30 group-hover:text-white/60"
+            }`}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium leading-snug">
+              {displayTitle}
+            </p>
+          </div>
+
+          {/* Pencil icon — appears on row hover, hidden while active to show chevron */}
+          {!isActive && (
+            <button
+              type="button"
+              onClick={startEditing}
+              className="invisible ml-auto shrink-0 rounded p-0.5 text-white/30 hover:text-white/80 group-hover/item:visible focus:visible"
+              aria-label={`Rename "${displayTitle}"`}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+
+          {isActive && (
+            <>
+              {/* Pencil on active row */}
+              <button
+                type="button"
+                onClick={startEditing}
+                className="invisible shrink-0 rounded p-0.5 text-white/40 hover:text-white group-hover/item:visible focus:visible"
+                aria-label={`Rename "${displayTitle}"`}
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+              <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-abb-primary" />
+            </>
+          )}
+        </button>
+      )}
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component: Chat History Sidebar (date-grouped)
 // ---------------------------------------------------------------------------
 function ChatSidebar() {
   const sessions = useChatStore((s) => s.sessions);
@@ -39,17 +222,11 @@ function ChatSidebar() {
   const isSidebarOpen = useChatStore((s) => s.isSidebarOpen);
   const setSidebarOpen = useChatStore((s) => s.setSidebarOpen);
   const loadSession = useChatStore((s) => s.loadSession);
-  const loadSessions = useChatStore((s) => s.loadSessions);
   const newSession = useChatStore((s) => s.newSession);
   const userRole = useChatStore((s) => s.userRole);
   const userId = useChatStore((s) => s.userId);
 
-  // Fetch real sessions from the DB whenever the sidebar opens
-  useEffect(() => {
-    if (isSidebarOpen) {
-      void loadSessions(userId);
-    }
-  }, [isSidebarOpen, userId, loadSessions]);
+  const groups = groupSessionsByDate(sessions);
 
   return (
     <>
@@ -118,46 +295,31 @@ function ChatSidebar() {
           </button>
         </div>
 
-        {/* Session list */}
+        {/* Date-grouped session list */}
         <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Past sessions">
           {sessions.length === 0 ? (
             <p className="px-2 text-xs text-white/40">No previous sessions.</p>
           ) : (
-            <ul className="space-y-1">
-              {sessions.map((session) => {
-                const isActive = session.id === activeSessionId;
-                return (
-                  <li key={session.id}>
-                    <button
-                      type="button"
-                      onClick={() => loadSession(session.id)}
-                      className={`group flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left transition ${
-                        isActive
-                          ? "bg-white/15 text-white"
-                          : "text-white/60 hover:bg-white/8 hover:text-white"
-                      }`}
-                    >
-                      <MessageSquare
-                        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
-                          isActive ? "text-abb-primary" : "text-white/30 group-hover:text-white/60"
-                        }`}
+            <div className="space-y-4">
+              {groups.map((group) => (
+                <section key={group.label} aria-label={group.label}>
+                  {/* Group subheading */}
+                  <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-widest text-white/30">
+                    {group.label}
+                  </p>
+                  <ul className="space-y-0.5">
+                    {group.sessions.map((session) => (
+                      <SessionItem
+                        key={session.id}
+                        session={session}
+                        isActive={session.id === activeSessionId}
+                        onSelect={() => loadSession(session.id)}
                       />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-medium leading-snug">
-                          {session.title}
-                        </p>
-                        <p className="mt-0.5 text-[10px] text-white/40">
-                          {formatSessionDate(session.date)}
-                        </p>
-                      </div>
-                      {isActive && (
-                        <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-abb-primary" />
-                      )}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
           )}
         </nav>
 
@@ -204,10 +366,16 @@ export function ChatWidget() {
   const toggleOpen = useChatStore((s) => s.toggleOpen);
   const toggleSidebar = useChatStore((s) => s.toggleSidebar);
   const newSession = useChatStore((s) => s.newSession);
+  const fetchHistory = useChatStore((s) => s.fetchHistory);
   const { sendMessage, isStreaming } = useChatStream();
 
   const [input, setInput] = useState("");
   const feedRef = useRef<HTMLDivElement>(null);
+
+  // Hydrate sidebar history once on mount
+  useEffect(() => {
+    void fetchHistory();
+  }, [fetchHistory]);
 
   // Auto-scroll to newest message
   useEffect(() => {

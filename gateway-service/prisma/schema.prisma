@@ -17,7 +17,7 @@ model Session {
   id        String    @id
   userId    String
   role      String
-  title     String
+  title     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   messages  Message[]

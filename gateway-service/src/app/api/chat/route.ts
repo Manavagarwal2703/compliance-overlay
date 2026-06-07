@@ -251,7 +251,11 @@ export async function POST(request: Request): Promise<Response> {
 
   const aiPayload: AiChatRequest = {
     conversation_id: sessionId,
-    role,
+    // Always send "user" to the AI service regardless of the role in the
+    // incoming request. The ai-service Pydantic models accept exactly
+    // "user" or "reviewer"; defaulting to "user" ensures the AI pipeline
+    // does not crash on unexpected role values from the widget.
+    role: "user",
     query: message,
     context_history: contextHistory,
   };

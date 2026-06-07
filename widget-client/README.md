@@ -142,9 +142,10 @@ widget.setAttribute('open', 'true');
 
 - **Floating launcher button** (bottom-right corner) — hidden when the panel is open.
 - **Read-only role badge** in the panel header — shows the `user-role` attribute value; no manual toggle in the UI.
-- **Chat History sidebar** — collapsible drawer listing past sessions with auto-generated titles and dates.
+- **Chat History sidebar** — collapsible drawer grouping past sessions into **Today**, **Previous 7 Days**, and **Older** sections. Empty groups are not rendered.
+- **Inline session rename** — hover any session row to reveal a pencil icon. Clicking it replaces the title text with a small `<input>`. Press **Enter** or click away to save; press **Esc** to cancel.
 - **New Chat button** — available in the sidebar header and as a shortcut in the main header; archives the current session before creating a fresh one.
-- **Session switching** — clicking a past session in the sidebar sets it as active and clears the message list (API hydration hook-ready).
+- **Session switching** — clicking a past session in the sidebar loads its message history from the gateway API.
 - **Identity badge** — sidebar footer displays the current `user-id` and `user-role`.
 - **Streaming message feed** — animated blinking cursor while the assistant is composing a reply.
 - **Error banner** — displayed on gateway or network failures with the error message.
@@ -201,11 +202,16 @@ The entire widget state lives in a single flat Zustand store. There is no React 
 
 ```typescript
 type ChatSession = {
-  id: string;    // "sess_<timestamp>_<random>"
-  title: string; // First 48 chars of the first user message
-  date: string;  // ISO date string, e.g. "2026-06-03"
+  id: string;           // "sess_<timestamp>_<random>" or gateway UUID
+  title: string | null; // User-set name, or null if not yet renamed
+  date: string;         // ISO date string, e.g. "2026-06-03" — used for group bucketing
+  updatedAt: string;    // Full ISO timestamp of last activity
 };
 ```
+
+`title` is resolved for display as follows (in priority order):
+1. `title` (when non-null and non-empty)
+2. `"New Chat"` fallback
 
 #### `ChatMessage` type
 
@@ -239,6 +245,7 @@ type ChatMessage = {
 | `setError` | `(msg \| null) => void` | Sets or clears the error banner. |
 | `setStreaming` | `(bool) => void` | Manually controls the streaming lock. |
 | `clearMessages` | `() => void` | Clears messages and generates a new session ID (used in dev). |
+| `renameSession` | `(sessionId, newTitle) => Promise<void>` | **Optimistically** updates the local `sessions` array then PATCHes `PATCH /api/chat/history/[sessionId]`. Rolls back and sets `error` on failure. |
 
 ### Session History Flow
 
@@ -261,20 +268,55 @@ newSession() is called
 User clicks a past session in the sidebar
         │
         ▼
-setActiveSession(id)
+loadSession(id)         ← fetches GET /api/chat/history/:sessionId
         → activeSessionId = id
-        → messages = []          ← cleared (API integration point)
+        → messages populated from API response
         → isSidebarOpen = false
+
+User hovers a session row → pencil icon appears
+        │
+        ▼
+User clicks pencil → title text becomes <input> (inline)
+        │
+        ├─ User presses Enter or clicks away (blur)
+        │        → renameSession(id, newTitle) called
+        │        → optimistic local update applied immediately
+        │        → PATCH /api/chat/history/:sessionId { title }
+        │        → on error: rollback + error banner
+        │
+        └─ User presses Escape
+                 → input dismissed, no save
 ```
 
-To hydrate messages for a past session from the gateway:
+---
 
-```typescript
-// In your integration layer — call the gateway history endpoint
-const res = await fetch(`http://localhost:3000/api/chat/history/${sessionId}`);
-const { messages } = await res.json();
-// Then populate the store with the returned messages
-```
+## Sidebar Date Grouping
+
+The `ChatSidebar` component groups sessions into sections using the `date` field (ISO string) stored on each `ChatSession`:
+
+| Section | Condition |
+|---|---|
+| **Today** | `session.date === today` |
+| **Previous 7 Days** | `session.date >= (today − 7 days)` and not today |
+| **Older** | Everything else |
+
+The `groupSessionsByDate()` helper function (in `ChatWidget.tsx`) performs this bucketing. Sections with zero sessions are omitted entirely — no empty headings are rendered.
+
+---
+
+## Inline Session Rename
+
+Every session row in the sidebar has a hover-revealed pencil (✏️) icon. The interaction is handled by the `SessionItem` component:
+
+1. **Hover** the row → `<Pencil />` icon fades in (via Tailwind `invisible group-hover/item:visible`).
+2. **Click pencil** → title `<p>` swaps out for a transparent `<input>` pre-filled with the current title (or blank if it was "New Chat").
+3. **Commit** via **Enter** or **blur** → calls `renameSession(id, newTitle)` in the Zustand store:
+   - Immediate **optimistic update** in the local `sessions[]` array.
+   - **PATCH** `{gateway-url}/api/chat/history/:sessionId` with `{ title: newTitle }`.
+   - On failure: the previous sessions array is restored and `error` is set (error banner shown).
+4. **Cancel** via **Escape** → input dismissed, no network request, title unchanged.
+
+> If the submitted value is blank or unchanged, `renameSession` is not called.
 
 ---
 
@@ -446,6 +488,8 @@ npm run preview
 | `401 Unauthorized` from gateway | Gateway has `REQUIRE_AUTH=true`. Either set `auth-token` on the element or set `REQUIRE_AUTH=false` for local testing. |
 | Token rejected with "signature failed" | Verify the JWT was signed with the same `JWT_SECRET` configured in gateway `.env`. |
 | Citation pills not appearing | Verify the AI service has `ENABLE_CITATIONS=true` and that a ChromaDB-backed RAG query was made (general chat queries do not emit a `sources` event). |
+| Rename fails with 404/405 | The gateway `PATCH /api/chat/history/[sessionId]` endpoint is not deployed. The UI automatically rolls back the optimistic title update and shows an error banner. Deploy the gateway endpoint first. |
+| Rename rolls back immediately | Check the gateway console for the PATCH response status. Usually a JWT/auth issue — ensure `auth-token` is set if `REQUIRE_AUTH=true`. |
 
 ---
 

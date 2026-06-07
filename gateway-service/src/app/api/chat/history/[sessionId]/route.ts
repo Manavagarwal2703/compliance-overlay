@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/prisma";
+import { logger } from "@/lib/logger";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, PATCH, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
@@ -83,6 +84,94 @@ export async function GET(
     const detail = err instanceof Error ? err.message : "Database error";
     return Response.json(
       { error: "Failed to fetch messages", detail },
+      { status: 500, headers: CORS_HEADERS }
+    );
+  }
+}
+
+/**
+ * PATCH /api/chat/history/:sessionId
+ *
+ * Updates the title of an existing session.
+ *
+ * Request body:
+ * { "title": "New Session Name" }
+ *
+ * Response — 200 OK:
+ * {
+ *   "id": "sess_abc123",
+ *   "userId": "usr_42",
+ *   "role": "user",
+ *   "title": "New Session Name",
+ *   "createdAt": "2026-06-07T10:30:00.000Z",
+ *   "updatedAt": "2026-06-07T10:35:00.000Z"
+ * }
+ *
+ * Error responses:
+ *   400 — missing or non-string title in request body
+ *   404 — no session found with the given sessionId
+ *   500 — database error
+ */
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ sessionId: string }> }
+): Promise<Response> {
+  const { sessionId } = await params;
+
+  // ── Parse and validate request body ────────────────────────────────────────
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json(
+      { error: "Invalid JSON body" },
+      { status: 400, headers: CORS_HEADERS }
+    );
+  }
+
+  const title =
+    body !== null &&
+    typeof body === "object" &&
+    "title" in body
+      ? (body as Record<string, unknown>).title
+      : undefined;
+
+  if (typeof title !== "string" || title.trim() === "") {
+    return Response.json(
+      { error: "Request body must contain a non-empty string field: title" },
+      { status: 400, headers: CORS_HEADERS }
+    );
+  }
+
+  try {
+    // Verify the session exists before attempting an update.
+    const existing = await prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return Response.json(
+        { error: "Session not found" },
+        { status: 404, headers: CORS_HEADERS }
+      );
+    }
+
+    const updated = await prisma.session.update({
+      where: { id: sessionId },
+      data: { title: title.trim() },
+    });
+
+    return Response.json(updated, { status: 200, headers: CORS_HEADERS });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "Database error";
+    logger.error({
+      step: "db_update_session_title",
+      sessionId,
+      error: detail,
+    });
+    return Response.json(
+      { error: "Failed to update session title", detail },
       { status: 500, headers: CORS_HEADERS }
     );
   }
