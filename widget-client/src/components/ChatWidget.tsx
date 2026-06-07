@@ -11,6 +11,7 @@ import {
   Clock,
   ChevronRight,
   User,
+  BookOpen,
 } from "lucide-react";
 import { useChatStore } from "../store/useChatStore";
 import { useChatStream } from "../hooks/useChatStream";
@@ -340,6 +341,27 @@ export function ChatWidget() {
                       </>
                     )}
                   </p>
+
+                  {/* ── RAG Citation Pills ── */}
+                  {msg.role === "assistant" &&
+                    msg.sources &&
+                    msg.sources.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-widest text-slate-400">
+                          <BookOpen className="h-2.5 w-2.5" />
+                          Sources
+                        </span>
+                        {msg.sources.map((src) => (
+                          <span
+                            key={src}
+                            title={src}
+                            className="inline-flex max-w-[160px] items-center truncate rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 ring-1 ring-slate-200"
+                          >
+                            {src}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                 </div>
               </div>
             ))}

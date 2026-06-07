@@ -215,6 +215,7 @@ type ChatMessage = {
   role: "user" | "reviewer" | "assistant";
   content: string;
   isStreaming?: boolean; // true while SSE tokens are still arriving
+  sources?: string[];   // RAG citation filenames — populated by the Contract C `sources` event
 };
 ```
 
@@ -233,6 +234,7 @@ type ChatMessage = {
 | `addUserMessage` | `(content) => string` | Appends a `{ role: userRole, content }` message; returns the generated ID. |
 | `startAssistantMessage` | `() => string` | Appends an empty streaming assistant message; returns its ID. |
 | `appendStreamToken` | `(token) => void` | Appends a token string to the last assistant message's `content`. |
+| `setStreamSources` | `(sources: string[]) => void` | Attaches RAG citation filenames to the currently-streaming assistant message. Called when the Contract C `sources` SSE event is received. |
 | `finishStream` | `() => void` | Sets `isStreaming: false` on all messages; releases the streaming lock. |
 | `setError` | `(msg \| null) => void` | Sets or clears the error banner. |
 | `setStreaming` | `(bool) => void` | Manually controls the streaming lock. |
@@ -285,9 +287,10 @@ The `useChatStream` hook handles the full Contract A → Contract C lifecycle:
 3. Reads the streaming response body with `response.body.getReader()` + `TextDecoder`.
 4. Splits the decoded text on newlines and parses each `data: {...}` line.
 5. On `type: "token"` → calls `appendStreamToken(content)`.
-6. On `type: "done"` → calls `finishStream()`.
-7. On `type: "error"` → calls `setError(content)`.
-8. Network/fetch errors are caught and forwarded to `setError()`.
+6. On `type: "sources"` → calls `setStreamSources(content)` — attaches the citation array to the current assistant message.
+7. On `type: "done"` → calls `finishStream()`.
+8. On `type: "error"` → calls `setError(content)`.
+9. Network/fetch errors are caught and forwarded to `setError()`.
 
 ---
 
@@ -314,11 +317,16 @@ Authorization: Bearer <jwt>   ← included only when auth-token attribute is set
 
 ## Contract C — Inbound SSE Shape
 
+Standard RAG response with citations:
+
 ```
 data: {"type": "token", "content": "The Q2 "}
 data: {"type": "token", "content": "status is fully compliant."}
+data: {"type": "sources", "content": ["ISO_9001_Policy.pdf", "Q2_Audit_Report.pdf"]}
 data: {"type": "done"}
 ```
+
+The `sources` event is **optional**. When absent (e.g. for general chat responses), no citation pills are rendered.
 
 Error event:
 
@@ -437,6 +445,7 @@ npm run preview
 | `userId` missing in gateway payload | Verify `user-id` attribute is set on the element |
 | `401 Unauthorized` from gateway | Gateway has `REQUIRE_AUTH=true`. Either set `auth-token` on the element or set `REQUIRE_AUTH=false` for local testing. |
 | Token rejected with "signature failed" | Verify the JWT was signed with the same `JWT_SECRET` configured in gateway `.env`. |
+| Citation pills not appearing | Verify the AI service has `ENABLE_CITATIONS=true` and that a ChromaDB-backed RAG query was made (general chat queries do not emit a `sources` event). |
 
 ---
 

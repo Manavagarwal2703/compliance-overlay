@@ -2,8 +2,8 @@ import { useCallback } from "react";
 import { useChatStore } from "../store/useChatStore";
 
 type SsePayload = {
-  type: "token" | "done" | "error";
-  content?: string;
+  type: "token" | "done" | "error" | "sources";
+  content?: string | string[];
 };
 
 function parseSseLine(line: string): SsePayload | null {
@@ -32,6 +32,7 @@ export function useChatStream() {
   const addUserMessage = useChatStore((s) => s.addUserMessage);
   const startAssistantMessage = useChatStore((s) => s.startAssistantMessage);
   const appendStreamToken = useChatStore((s) => s.appendStreamToken);
+  const setStreamSources = useChatStore((s) => s.setStreamSources);
   const finishStream = useChatStore((s) => s.finishStream);
   const setError = useChatStore((s) => s.setError);
   const setStreaming = useChatStore((s) => s.setStreaming);
@@ -63,7 +64,7 @@ export function useChatStream() {
           headers: requestHeaders,
           body: JSON.stringify({
             sessionId: activeSessionId,
-            userId,
+            userId: userId || "dev_user_001",
             role: userRole,
             message: trimmed,
           }),
@@ -97,21 +98,24 @@ export function useChatStream() {
             if (!parsed) {
               continue;
             }
-            if (parsed.type === "token" && parsed.content) {
+            if (parsed.type === "token" && typeof parsed.content === "string" && parsed.content) {
               appendStreamToken(parsed.content);
+            }
+            if (parsed.type === "sources" && Array.isArray(parsed.content)) {
+              setStreamSources(parsed.content as string[]);
             }
             if (parsed.type === "done") {
               finishStream();
             }
             if (parsed.type === "error") {
-              throw new Error(parsed.content ?? "Stream error");
+              throw new Error(typeof parsed.content === "string" ? parsed.content : "Stream error");
             }
           }
         }
 
         if (buffer.trim()) {
           const parsed = parseSseLine(buffer);
-          if (parsed?.type === "token" && parsed.content) {
+          if (parsed?.type === "token" && typeof parsed.content === "string" && parsed.content) {
             appendStreamToken(parsed.content);
           }
         }
@@ -133,6 +137,7 @@ export function useChatStream() {
       addUserMessage,
       startAssistantMessage,
       appendStreamToken,
+      setStreamSources,
       finishStream,
       setError,
       setStreaming,

@@ -11,6 +11,8 @@ export type ChatMessage = {
   role: ChatRole | "assistant";
   content: string;
   isStreaming?: boolean;
+  /** RAG citation filenames attached via the Contract C `sources` SSE event. */
+  sources?: string[];
 };
 
 /**
@@ -82,6 +84,8 @@ type ChatState = {
   addUserMessage: (content: string) => string;
   startAssistantMessage: () => string;
   appendStreamToken: (token: string) => void;
+  /** Attach RAG citation sources to the currently-streaming assistant message. */
+  setStreamSources: (sources: string[]) => void;
   finishStream: () => void;
   setError: (error: string | null) => void;
   setStreaming: (streaming: boolean) => void;
@@ -279,6 +283,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: last.content + token,
         isStreaming: true,
       };
+      return { messages };
+    });
+  },
+
+  setStreamSources: (sources) => {
+    set((s) => {
+      const messages = [...s.messages];
+      const last = messages[messages.length - 1];
+      if (!last || last.role !== "assistant") {
+        return s;
+      }
+      messages[messages.length - 1] = { ...last, sources };
       return { messages };
     });
   },
