@@ -43,14 +43,24 @@ type ChatState = {
   sessions: ChatSession[];
   isSidebarOpen: boolean;
 
-  // ── Gateway ───────────────────────────────────────────────────────────────
+  // ── Gateway ─────────────────────────────────────────────────────────────────
   gatewayUrl: string;
+
+  // ── Auth ──────────────────────────────────────────────────────────────────────
+  /**
+   * Optional JWT Bearer token injected from the `auth-token` HTML attribute.
+   * When set, useChatStream attaches it as `Authorization: Bearer <token>` on
+   * every Contract A request. When null, the header is omitted entirely.
+   */
+  authToken: string | null;
 
   // ── Actions ───────────────────────────────────────────────────────────────
   /** Called once by the Web Component after reading HTML attributes. */
   initUser: (userId: string, userRole: ChatRole) => void;
 
   setGatewayUrl: (url: string) => void;
+  /** Update the auth token from the auth-token HTML attribute. */
+  setAuthToken: (token: string | null) => void;
   toggleOpen: () => void;
   setOpen: (open: boolean) => void;
 
@@ -118,7 +128,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   isSidebarOpen: false,
 
-  // ── Gateway ───────────────────────────────────────────────────────────────
+  // ── Auth ──────────────────────────────────────────────────────────────────────
+  authToken: null,
+
+  // ── Gateway ─────────────────────────────────────────────────────────────────
   // Default is read from the VITE_GATEWAY_URL build-time env var.
   // In production, set VITE_GATEWAY_URL=http://<GATEWAY_HOST_IP>:3000 in
   // widget-client/.env (or .env.production) before running `npm run build`.
@@ -132,6 +145,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   initUser: (userId, userRole) => set({ userId, userRole }),
 
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
+
+  setAuthToken: (token) => set({ authToken: token }),
 
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
 

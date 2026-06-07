@@ -27,6 +27,7 @@ export function useChatStream() {
   const userId = useChatStore((s) => s.userId);
   const userRole = useChatStore((s) => s.userRole);
   const gatewayUrl = useChatStore((s) => s.gatewayUrl);
+  const authToken = useChatStore((s) => s.authToken);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const addUserMessage = useChatStore((s) => s.addUserMessage);
   const startAssistantMessage = useChatStore((s) => s.startAssistantMessage);
@@ -48,12 +49,18 @@ export function useChatStream() {
       setStreaming(true);
 
       try {
+        // Build request headers — attach the auth token only when present.
+        const requestHeaders: HeadersInit = {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        };
+        if (authToken) {
+          (requestHeaders as Record<string, string>)["Authorization"] = `Bearer ${authToken}`;
+        }
+
         const response = await fetch(gatewayUrl, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "text/event-stream",
-          },
+          headers: requestHeaders,
           body: JSON.stringify({
             sessionId: activeSessionId,
             userId,
@@ -121,6 +128,7 @@ export function useChatStream() {
       userId,
       userRole,
       gatewayUrl,
+      authToken,
       isStreaming,
       addUserMessage,
       startAssistantMessage,

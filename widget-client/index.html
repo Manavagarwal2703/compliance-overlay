@@ -1,18 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Compliance Chat Widget — Dev</title>
-  </head>
-  <body class="bg-slate-100 min-h-screen">
-    <div id="root" class="p-8">
-      <h1 class="text-xl font-semibold text-slate-800 mb-4">
-        Host Application (styles outside widget are isolated)
-      </h1>
-    </div>
 
-    <!--
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compliance Chat Widget — Dev</title>
+</head>
+
+<body class="bg-slate-100 min-h-screen">
+  <div id="root" class="p-8">
+    <h1 class="text-xl font-semibold text-slate-800 mb-4">
+      Host Application (styles outside widget are isolated)
+    </h1>
+  </div>
+
+  <!--
       Dev harness — NOT used in production.
       The gateway-url attribute is set dynamically by the inline script below
       so that it picks up VITE_GATEWAY_URL from your local .env file.
@@ -20,24 +22,23 @@
       to point the dev harness at any gateway on the intranet.
       If VITE_GATEWAY_URL is unset the script falls back to localhost:3000.
     -->
-    <compliance-chat-overlay
-      user-role="reviewer"
-      user-id="dev_user_001"
-    ></compliance-chat-overlay>
+  <compliance-chat-overlay
+    auth-token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJkZXZfdXNlcl8wMDEifQ.WwZx17TXMJ8yV9OrSkkEk12MPwkws0Ca116fKQr5eSk"></compliance-chat-overlay>
 
-    <script type="module" src="/src/mount.tsx"></script>
+  <script type="module" src="/src/mount.tsx"></script>
 
-    <!--
+  <!--
       Vite replaces import.meta.env.VITE_* strings at build/serve time.
       This tiny script runs after the module so the custom element is already
       defined, then patches the gateway-url attribute from the env var.
     -->
-    <script type="module">
-      const gatewayBase = import.meta.env.VITE_GATEWAY_URL || "http://localhost:3000";
-      const el = document.querySelector("compliance-chat-overlay");
-      if (el) {
-        el.setAttribute("gateway-url", `${gatewayBase}/api/chat`);
-      }
-    </script>
-  </body>
+  <script type="module">
+    const gatewayBase = import.meta.env.VITE_GATEWAY_URL || "http://localhost:3000";
+    const el = document.querySelector("compliance-chat-overlay");
+    if (el) {
+      el.setAttribute("gateway-url", `${gatewayBase}/api/chat`);
+    }
+  </script>
+</body>
+
 </html>

@@ -76,6 +76,16 @@ These three contracts are the **only** coupling between modules. Changing any fi
 
 **Endpoint:** `POST http://<GATEWAY_HOST_IP>:3000/api/chat`
 
+**Request headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Type` | **Yes** | Must be `application/json` |
+| `Accept` | **Yes** | Must be `text/event-stream` |
+| `Authorization` | Conditional | `Bearer <JWT>` — required when gateway `REQUIRE_AUTH=true`. The JWT must be HS256-signed with the gateway's `JWT_SECRET`. When `REQUIRE_AUTH=false`, this header is optional and `userId` is read from the body instead. |
+
+**Request body:**
+
 ```json
 {
   "sessionId": "sess_1748956800_abc123",
@@ -88,7 +98,7 @@ These three contracts are the **only** coupling between modules. Changing any fi
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `sessionId` | `string` | **Yes** | Client-generated stable session identifier (format: `sess_<timestamp>_<random>`) |
-| `userId` | `string` | **Yes** | User ID from the `user-id` HTML attribute on the web component |
+| `userId` | `string` | Conditional | User ID from the `user-id` HTML attribute. **Ignored by the gateway when `REQUIRE_AUTH=true`** — the gateway extracts `userId` from the verified JWT instead. Still required in the body when `REQUIRE_AUTH=false`. |
 | `role` | `"user"` \| `"reviewer"` | **Yes** | Active persona; affects AI routing in the semantic router |
 | `message` | `string` | **Yes** | The user's message text |
 
@@ -99,6 +109,7 @@ These three contracts are the **only** coupling between modules. Changing any fi
 | Status | Cause |
 |--------|-------|
 | `400` | Missing or malformed required fields |
+| `401` | Missing or invalid `Authorization` header (only when `REQUIRE_AUTH=true`) |
 | `500` | Database error before streaming begins |
 | `502` | AI service unreachable or returned an error |
 
@@ -383,6 +394,9 @@ Serve the `dist/` folder from IIS, Nginx, or any intranet static file host. Then
 | Gateway | `DATABASE_URL` | — | **Required.** PostgreSQL connection string |
 | Gateway | `AI_SERVICE_URL` | — | **Required.** Full URL to ai-service `/v1/chat/stream`. Use intranet IP, not localhost. |
 | Gateway | `NEXT_PUBLIC_GATEWAY_URL` | — | Optional. Public base URL of this gateway (for self-referential links). |
+| Gateway | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` requires `Authorization: Bearer <JWT>`. When `false`, bypasses JWT check and trusts `userId` from the request body (dev only). |
+| Gateway | `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`  |
+| Gateway | `ALLOWED_ORIGINS` | `""` (wildcard `*`) | Comma-separated origin allowlist for CORS. Empty = `Access-Control-Allow-Origin: *` (dev only). |
 | Widget | `VITE_GATEWAY_URL` | `http://localhost:3000` | Base URL of the gateway, baked into the JS bundle at build time. Set before `npm run build`. |
 | AI | `GROQ_API_KEY` | `""` | Groq API key (required unless `USE_AZURE=true`) |
 | AI | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model name |
@@ -422,6 +436,7 @@ This produces `dist/compliance-chat-overlay.es.js` (ES module) and `dist/complia
   gateway-url="https://api.example.com/api/chat"
   user-role="reviewer"
   user-id="usr_abc123"
+  auth-token="<jwt-from-your-auth-provider>"
 ></compliance-chat-overlay>
 ```
 
@@ -433,6 +448,7 @@ This produces `dist/compliance-chat-overlay.es.js` (ES module) and `dist/complia
 | `user-id` | **Yes** | Authenticated user's unique identifier. Sent in every Contract A request as `userId`. |
 | `gateway-url` | **Yes** (production) | Full URL to the gateway `/api/chat` endpoint, e.g. `http://192.168.1.100:3000/api/chat`. In dev the widget falls back to `VITE_GATEWAY_URL` from `.env`. |
 | `open` | No | `"true"` to open the chat panel immediately on mount |
+| `auth-token` | Conditional | JWT Bearer token. **Required in production** when gateway `REQUIRE_AUTH=true`. Omit for dev when `REQUIRE_AUTH=false`. |
 
 ---
 

@@ -55,6 +55,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 | `user-id` | `string` | **Yes** | Unique identifier for the authenticated user (e.g. `"usr_abc123"`). Sent as `userId` in every Contract A request, stored in the Zustand store, and shown in the sidebar identity badge. |
 | `gateway-url` | URL string | No | Override the Contract A endpoint. Default: `http://localhost:3000/api/chat` |
 | `open` | `"true"` | No | If present and `"true"`, the chat panel opens immediately on mount. |
+| `auth-token` | JWT string | No | Optional JWT Bearer token issued by your authentication provider. When provided, every Contract A POST includes an `Authorization: Bearer <token>` header. Required by the gateway when `REQUIRE_AUTH=true`. Omit entirely for dev/bypass mode. |
 
 > **Important:** `user-role` and `user-id` are set by the **host application** and cannot be changed from inside the widget UI. Changing them via `setAttribute()` after mount is fully supported — `attributeChangedCallback` in `mount.tsx` propagates the new values into the Zustand store automatically.
 
@@ -73,6 +74,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
   gateway-url="https://api.example.com/api/chat"
   user-role="reviewer"
   user-id="usr_abc123"
+  auth-token="<jwt-from-your-auth-provider>"
 ></compliance-chat-overlay>
 ```
 
@@ -83,6 +85,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
   gateway-url="https://api.example.com/api/chat"
   user-role="user"
   user-id="usr_xyz789"
+  auth-token="<jwt-from-your-auth-provider>"
 ></compliance-chat-overlay>
 ```
 
@@ -93,7 +96,20 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
   gateway-url="https://api.example.com/api/chat"
   user-role="reviewer"
   user-id="usr_abc123"
+  auth-token="<jwt-from-your-auth-provider>"
   open="true"
+></compliance-chat-overlay>
+```
+
+### Dev / Bypass Mode (REQUIRE_AUTH=false on gateway)
+
+When the gateway is running with `REQUIRE_AUTH=false`, you can omit `auth-token` entirely for local testing:
+
+```html
+<compliance-chat-overlay
+  gateway-url="http://localhost:3000/api/chat"
+  user-role="reviewer"
+  user-id="dev_user_001"
 ></compliance-chat-overlay>
 ```
 
@@ -105,6 +121,9 @@ const widget = document.querySelector('compliance-chat-overlay');
 // Switch user context at runtime (e.g. after re-authentication)
 widget.setAttribute('user-id', 'usr_newuser');
 widget.setAttribute('user-role', 'user');
+
+// Update the auth token (e.g. after a token refresh)
+widget.setAttribute('auth-token', '<refreshed-jwt>');
 
 // Programmatically open or close
 widget.setAttribute('open', 'true');
@@ -278,6 +297,7 @@ The `useChatStream` hook handles the full Contract A → Contract C lifecycle:
 POST http://localhost:3000/api/chat
 Content-Type: application/json
 Accept: text/event-stream
+Authorization: Bearer <jwt>   ← included only when auth-token attribute is set
 
 {
   "sessionId": "sess_1748956800_abc123",
@@ -289,6 +309,8 @@ Accept: text/event-stream
 
 `userId` comes from `useChatStore.userId` (set from `user-id` attribute).
 `role` comes from `useChatStore.userRole` (set from `user-role` attribute).
+
+> **Note:** When the gateway runs with `REQUIRE_AUTH=true`, the `Authorization` header is mandatory and `userId` in the body is ignored — the gateway extracts it from the verified JWT instead.
 
 ## Contract C — Inbound SSE Shape
 
@@ -413,6 +435,8 @@ npm run preview
 | 502 from fetch | Start AI service and gateway before the widget |
 | Sidebar not visible | Intentional — `overflow-hidden` on the panel container clips the drawer |
 | `userId` missing in gateway payload | Verify `user-id` attribute is set on the element |
+| `401 Unauthorized` from gateway | Gateway has `REQUIRE_AUTH=true`. Either set `auth-token` on the element or set `REQUIRE_AUTH=false` for local testing. |
+| Token rejected with "signature failed" | Verify the JWT was signed with the same `JWT_SECRET` configured in gateway `.env`. |
 
 ---
 

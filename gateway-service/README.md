@@ -94,8 +94,106 @@ AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
 | `DATABASE_URL` | — | **Required.** Full PostgreSQL connection string. Read by `prisma.config.ts`. |
 | `AI_SERVICE_URL` | `http://localhost:8000/v1/chat/stream` | Contract B endpoint forwarded to the AI service. |
 | `ENABLE_AI_MEMORY` | `true` | When `true`, fetches the last 5 conversation turns from Postgres and injects them into the Contract B `context_history` array. When `false`, always sends `context_history: []`. Does **not** affect the history API endpoints. |
+| `REQUIRE_AUTH` | `true` | When `true`, every `POST /api/chat` must include a valid `Authorization: Bearer <JWT>` header. When `false`, skips JWT verification and trusts the `userId` in the JSON body (dev / bypass mode). |
+| `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`  |
+| `ALLOWED_ORIGINS` | `""` (wildcard `*`) | Comma-separated list of origins permitted for CORS. When empty, falls back to `*` (dev only). Example: `"http://localhost:5173,https://client.example.com"`. |
 
 > **Prisma 7 note:** Unlike Prisma 6 and earlier, the connection URL is configured in `prisma.config.ts` (not in `schema.prisma`). Next.js reads `.env.local` automatically, so `DATABASE_URL` is available to both the Next.js routes and the Prisma config at runtime.
+
+---
+
+## Authentication — `REQUIRE_AUTH`
+
+The gateway implements an **optional JWT authentication layer** on `POST /api/chat`. The behaviour is controlled by the `REQUIRE_AUTH` environment variable.
+
+### Modes
+
+| `REQUIRE_AUTH` | Behaviour | When to use |
+|---|---|---|
+| `true` _(default)_ | `Authorization: Bearer <JWT>` header is **required** on every request. `userId` is extracted from the verified token — the body-supplied value is ignored. | All production environments |
+| `false` | No token required. `userId` in the JSON body is trusted directly. | Local dev, `curl` smoke tests, integration testing |
+
+> [!CAUTION]
+> **Never** set `REQUIRE_AUTH=false` in production. Without JWT verification, any caller can impersonate any user by sending an arbitrary `userId` in the request body.
+
+### How JWT verification works
+
+The utility in `src/lib/auth.ts` uses Node.js's built-in `crypto` module — no third-party JWT package required.
+
+- **Algorithm:** HS256 (HMAC-SHA256)
+- **Secret:** read from `JWT_SECRET` env var
+- **Claims checked:** `exp` (expiry, if present), `userId` or `sub` (user identity)
+- **Timing-safe comparison:** uses `crypto.timingSafeEqual` to prevent timing attacks
+
+### Bypassing auth for local testing (REQUIRE_AUTH=false)
+
+Set these two variables in `gateway-service/.env` to enable bypass mode:
+
+```env
+REQUIRE_AUTH=false
+# JWT_SECRET is not needed in bypass mode
+```
+
+Then test with `curl` without a token:
+
+```powershell
+curl -X POST http://localhost:3000/api/chat `
+  -H "Content-Type: application/json" `
+  -H "Accept: text/event-stream" `
+  -N `
+  -d '{"sessionId":"sess_smoke","userId":"usr_test","role":"reviewer","message":"Hello"}'
+```
+
+### Enabling auth for production (REQUIRE_AUTH=true)
+
+1. Generate a secret:
+   ```powershell
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+2. Add to `gateway-service/.env`:
+   ```env
+   REQUIRE_AUTH=true
+   JWT_SECRET="<your-generated-secret>"
+   ```
+3. Mint tokens in your auth provider using the same secret and HS256 algorithm. Include `userId` (or `sub`) as a claim.
+4. Pass the token to the widget via the `auth-token` HTML attribute (see [widget-client/README.md](../widget-client/README.md)).
+
+### Testing with a real token (curl)
+
+```powershell
+# Replace <TOKEN> with a valid HS256 JWT signed with JWT_SECRET
+curl -X POST http://localhost:3000/api/chat `
+  -H "Content-Type: application/json" `
+  -H "Accept: text/event-stream" `
+  -H "Authorization: Bearer <TOKEN>" `
+  -N `
+  -d '{"sessionId":"sess_smoke","role":"reviewer","message":"Hello"}'
+```
+
+> Note: in `REQUIRE_AUTH=true` mode you do **not** need to include `userId` in the body — it is extracted from the verified JWT.
+
+### Auth step names in structured logs
+
+| `step` | Triggered by |
+|--------|--------------|
+| `auth_verify` | JWT signature check failure or missing `userId`/`sub` claim (logged as `warn`) |
+
+---
+
+## CORS — `ALLOWED_ORIGINS`
+
+The gateway dynamically computes the `Access-Control-Allow-Origin` response header based on the `ALLOWED_ORIGINS` environment variable.
+
+| `ALLOWED_ORIGINS` value | CORS behaviour |
+|---|---|
+| Empty / unset | Wildcard `*` — all origins permitted (dev only) |
+| `"http://localhost:5173"` | Only that origin is echoed back |
+| `"http://localhost:5173,https://app.example.com"` | Either matching origin is echoed; non-matching origins get `"null"` |
+
+When a specific (non-wildcard) origin is set, the gateway also returns `Access-Control-Allow-Credentials: true`, enabling browsers to send cookies alongside the `Authorization` header.
+
+> [!WARNING]
+> Leaving `ALLOWED_ORIGINS` empty (wildcard `*`) in production means any web page can call this API from a browser. Always set explicit origins in production.
 
 ---
 
@@ -203,7 +301,9 @@ npm start
 
 ### `OPTIONS /api/chat`
 
-CORS preflight handler. Responds `204 No Content` with `Access-Control-Allow-Origin: *` for development.
+CORS preflight handler. Responds `204 No Content`.
+
+The `Access-Control-Allow-Origin` header is set to the requesting origin only if it appears in `ALLOWED_ORIGINS`. When `ALLOWED_ORIGINS` is empty, the wildcard `*` is used (dev only).
 
 ---
 
@@ -249,7 +349,7 @@ Content-Type: text/event-stream
 Cache-Control: no-cache, no-transform
 Connection: keep-alive
 X-Accel-Buffering: no
-Access-Control-Allow-Origin: *
+Access-Control-Allow-Origin: <origin>   ← echoes the request origin if in ALLOWED_ORIGINS, else "*" in dev
 ```
 
 **Error responses:**
@@ -257,6 +357,7 @@ Access-Control-Allow-Origin: *
 | Status | Cause |
 |--------|-------|
 | `400` | Missing or malformed JSON body |
+| `401` | Missing `Authorization` header, or JWT verification failed (only when `REQUIRE_AUTH=true`) |
 | `500` | Database error during session upsert or user message creation |
 | `502` | AI service unreachable or returned a non-`2xx` response |
 

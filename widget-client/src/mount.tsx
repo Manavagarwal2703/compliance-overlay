@@ -12,7 +12,7 @@ class ComplianceChatElement extends HTMLElement {
   private styleEl: HTMLStyleElement | null = null;
 
   static get observedAttributes(): string[] {
-    return ["gateway-url", "open", "user-role", "user-id"];
+    return ["gateway-url", "open", "user-role", "user-id", "auth-token"];
   }
 
   connectedCallback(): void {
@@ -51,6 +51,11 @@ class ComplianceChatElement extends HTMLElement {
       rawRole === "reviewer" ? "reviewer" : "user";
     const userId = this.getAttribute("user-id") ?? "";
     useChatStore.getState().initUser(userId, userRole);
+
+    // auth-token is optional. When present, useChatStream will attach it as
+    // Authorization: Bearer <token> on every Contract A POST request.
+    const authToken = this.getAttribute("auth-token");
+    useChatStore.getState().setAuthToken(authToken ?? null);
 
     // ── Mount React tree ────────────────────────────────────────────────────
     this.reactRoot = createRoot(mountPoint);
@@ -98,6 +103,9 @@ class ComplianceChatElement extends HTMLElement {
         useChatStore.getState().initUser(newValue ?? "", current.userRole);
         break;
       }
+      case "auth-token":
+        useChatStore.getState().setAuthToken(newValue ?? null);
+        break;
     }
   }
 }
