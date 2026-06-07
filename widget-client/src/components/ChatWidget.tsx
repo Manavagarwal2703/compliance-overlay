@@ -1,9 +1,9 @@
 import { FormEvent, useRef, useEffect, useState, KeyboardEvent } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   MessageSquare,
   X,
   Send,
-  Shield,
   Loader2,
   AlertCircle,
   PanelLeft,
@@ -21,6 +21,36 @@ import {
   type SystemStatus,
 } from "../store/useChatStore";
 import { useChatStream } from "../hooks/useChatStream";
+
+// Custom Enterprise Shield Icon
+function CustomShield({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M12 2L4 5V11.09C4 16.14 7.41 20.85 12 22C16.59 20.85 20 16.14 20 11.09V5L12 2Z"
+        fill="currentColor"
+        fillOpacity="0.15"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 11L12 7"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="15" r="1" fill="currentColor" />
+    </svg>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helper — date grouping
@@ -240,23 +270,30 @@ function ChatSidebar() {
   const groups = groupSessionsByDate(sessions);
 
   return (
-    <>
+    <AnimatePresence>
       {/* Backdrop — closes sidebar on click outside */}
       {isSidebarOpen && (
-        <div
-          className="absolute inset-0 z-10 bg-black/20 backdrop-blur-[1px]"
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="absolute inset-0 z-10 bg-slate-900/40 backdrop-blur-sm"
           onClick={() => setSidebarOpen(false)}
           aria-hidden="true"
         />
       )}
 
       {/* Drawer panel */}
-      <aside
-        className={`absolute inset-y-0 left-0 z-20 flex w-64 flex-col bg-abb-dark text-white transition-transform duration-300 ${
-          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-        aria-label="Chat history sidebar"
-      >
+      {isSidebarOpen && (
+        <motion.aside
+          initial={{ x: "-100%" }}
+          animate={{ x: 0 }}
+          exit={{ x: "-100%" }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          className="absolute inset-y-0 left-0 z-20 flex w-64 flex-col bg-slate-900/95 text-white backdrop-blur-md shadow-[4px_0_24px_rgba(0,0,0,0.5)] border-r border-white/10"
+          aria-label="Chat history sidebar"
+        >
         {/* Sidebar header */}
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
           <div className="flex items-center gap-2">
@@ -287,14 +324,16 @@ function ChatSidebar() {
 
         {/* New Chat button */}
         <div className="px-3 pt-3">
-          <button
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
             type="button"
             onClick={newSession}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-abb-primary/40 bg-abb-primary/10 px-3 py-2.5 text-xs font-semibold text-abb-primary transition hover:bg-abb-primary hover:text-white focus:outline-none focus:ring-2 focus:ring-abb-primary"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-abb-primary/40 bg-abb-primary/10 px-3 py-2.5 text-xs font-semibold text-abb-primary transition-colors hover:bg-abb-primary hover:text-white focus:outline-none focus:ring-2 focus:ring-abb-primary"
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-4 w-4" strokeWidth={2.5} />
             New Chat
-          </button>
+          </motion.button>
         </div>
 
         {/* Date-grouped session list */}
@@ -329,8 +368,9 @@ function ChatSidebar() {
         <div className="border-t border-white/10 px-4 py-3">
           <p className="text-[10px] text-white/30">Compliance Assistant v2</p>
         </div>
-      </aside>
-    </>
+        </motion.aside>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -439,40 +479,54 @@ export function ChatWidget() {
 
   return (
     <div className="font-sans text-sm antialiased">
-      {/* ── FAB launcher ─────────────────────────────────────────────────── */}
-      {!isOpen && (
-        <button
-          type="button"
-          onClick={toggleOpen}
-          className="fixed bottom-6 right-6 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-abb-primary text-white shadow-lg transition hover:scale-105 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-abb-primary focus:ring-offset-2"
-          aria-label="Open compliance chat"
-        >
-          <MessageSquare className="h-6 w-6" />
-        </button>
-      )}
+      <AnimatePresence>
+        {/* ── FAB launcher ─────────────────────────────────────────────────── */}
+        {!isOpen && (
+          <motion.button
+            key="fab"
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0, opacity: 0 }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            type="button"
+            onClick={toggleOpen}
+            className="fixed bottom-6 right-6 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-abb-primary text-white shadow-[0_0_20px_rgba(215,25,32,0.4)] ring-4 ring-abb-primary/20 focus:outline-none focus:ring-abb-primary focus:ring-offset-2"
+            aria-label="Open compliance chat"
+          >
+            <MessageSquare className="h-6 w-6" strokeWidth={2.5} fill="currentColor" />
+          </motion.button>
+        )}
 
-      {/* ── Chat panel ───────────────────────────────────────────────────── */}
-      {isOpen && (
-        <div className="fixed bottom-6 right-6 z-[9999] flex h-[560px] w-[400px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        {/* ── Chat panel ───────────────────────────────────────────────────── */}
+        {isOpen && (
+          <motion.div
+            key="panel"
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className="fixed bottom-6 right-6 z-[9999] flex h-[560px] w-[400px] flex-col overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 backdrop-blur-xl shadow-2xl"
+          >
           {/* ── Sidebar overlay ── */}
           <ChatSidebar />
 
           {/* ── Header ─────────────────────────────────────────────────── */}
-          <header className="relative z-0 flex items-center justify-between bg-abb-dark px-4 py-3 text-white">
+          <header className="relative z-0 flex items-center justify-between bg-slate-900/90 backdrop-blur-md px-4 py-3 text-white border-b border-white/10">
             <div className="flex items-center gap-2">
               {/* History toggle */}
               <button
                 type="button"
                 onClick={toggleSidebar}
-                className="rounded p-1 hover:bg-white/10 focus:outline-none"
+                className="rounded p-1 text-white/80 hover:bg-white/10 hover:text-white focus:outline-none transition-colors"
                 aria-label="Toggle chat history"
               >
-                <PanelLeft className="h-4 w-4" />
+                <PanelLeft className="h-5 w-5" strokeWidth={2.5} />
               </button>
 
-              <Shield className="h-5 w-5 text-abb-primary" />
+              <CustomShield className="h-5 w-5 text-abb-primary" />
               <OnlineIndicator />
-              <span className="font-semibold">Compliance Assistant</span>
+              <span className="font-semibold tracking-wide">Compliance Assistant</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -481,10 +535,10 @@ export function ChatWidget() {
                 type="button"
                 onClick={newSession}
                 disabled={isStreaming}
-                className="rounded p-1 text-white/70 hover:bg-white/10 hover:text-white focus:outline-none disabled:opacity-40"
+                className="rounded p-1 text-white/70 hover:bg-white/10 hover:text-white focus:outline-none disabled:opacity-40 transition-colors"
                 aria-label="New chat"
               >
-                <Plus className="h-4 w-4" />
+                <Plus className="h-5 w-5" strokeWidth={2.5} />
               </button>
 
               {/* Close */}
@@ -512,17 +566,20 @@ export function ChatWidget() {
                 <p className="text-xs font-medium text-slate-500">
                   Ask about compliance, policies, or audits.
                 </p>
-                <div className="flex flex-col items-center gap-2">
+                <div className="flex w-full flex-col items-stretch gap-2 px-4">
                   {EMPTY_SUGGESTIONS.map((suggestion) => (
-                    <button
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
                       key={suggestion}
                       type="button"
                       disabled={isStreaming || !chatEnabled}
                       onClick={() => void handleSuggestionClick(suggestion)}
-                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 shadow-sm transition hover:border-abb-primary/40 hover:bg-abb-primary/5 hover:text-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex items-center justify-between rounded-xl border border-slate-200/80 bg-white/60 backdrop-blur-sm p-3 text-left text-xs font-medium text-slate-700 shadow-sm transition-colors hover:border-abb-primary/40 hover:bg-white hover:text-abb-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {suggestion}
-                    </button>
+                      <span>{suggestion}</span>
+                      <ChevronRight className="h-4 w-4 opacity-50" />
+                    </motion.button>
                   ))}
                 </div>
               </div>
@@ -533,17 +590,20 @@ export function ChatWidget() {
               const senderLabel = isAssistant ? "Compliance Assistant" : displayName;
 
               return (
-              <div
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ type: "spring", stiffness: 260, damping: 20 }}
                 key={msg.id}
                 className={`flex ${
                   isAssistant ? "justify-start" : "justify-end"
                 }`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 ${
+                  className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${
                     isAssistant
-                      ? "border border-slate-200 bg-white text-slate-800 shadow-sm"
-                      : "border border-abb-primary/20 bg-abb-primary text-white shadow-md"
+                      ? "border border-slate-200 bg-white text-slate-800"
+                      : "border border-white/20 bg-abb-primary text-white ring-1 ring-black/5"
                   }`}
                 >
                   <span
@@ -591,7 +651,7 @@ export function ChatWidget() {
                       </div>
                     )}
                 </div>
-              </div>
+              </motion.div>
             );
             })}
           </div>
@@ -626,12 +686,13 @@ export function ChatWidget() {
               {isStreaming ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Send className="h-4 w-4" />
+                <Send className="h-4 w-4" strokeWidth={2.5} fill="currentColor" />
               )}
             </button>
           </form>
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

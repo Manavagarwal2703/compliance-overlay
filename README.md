@@ -66,6 +66,17 @@ flowchart TB
 
 ---
 
+## UI/UX Design Language
+
+The system features a bespoke, high-end enterprise design language in the `widget-client` to provide a premium user experience distinct from generic AI chatbots. Key elements include:
+
+- **Enterprise Glassmorphism:** Semi-transparent backgrounds (`backdrop-blur-md`) applied to the widget header and sidebar.
+- **Micro-Interactions:** Fluid, spring-based animations powered by `framer-motion` for chat bubbles popping in, sidebar sliding, and interactive hover states.
+- **Premium Iconography & Branding:** Solid, weighted icons (Phosphor-style) and a custom sophisticated "Compliance Assistant" SVG shield, accented by a tailored Corporate Red palette.
+- **Layered 3D Depth:** Chat bubbles and Action Cards utilize subtle shadows and borders to create depth in 3D space.
+
+---
+
 ## Data Exchange Contracts
 
 These three contracts are the **only** coupling between modules. Changing any field name requires coordinating all consumers of that contract.

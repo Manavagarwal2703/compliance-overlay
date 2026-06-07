@@ -5,8 +5,8 @@ export default {
     extend: {
       colors: {
         abb: {
-          primary: "#FF000F",
-          dark: "#1a1a2e",
+          primary: "#D71920",
+          dark: "#0f172a", // slate-900 equivalent for a richer dark mode
           surface: "#f8f9fc",
         },
       },

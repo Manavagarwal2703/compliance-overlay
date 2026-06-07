@@ -148,14 +148,17 @@ widget.setAttribute('open', 'true');
 
 ## UI Features
 
-- **Floating launcher button** (bottom-right corner) — hidden when the panel is open.
+- **Bespoke Enterprise Design** — High-end visual overhaul featuring Corporate Red accents (`#D71920`), thick Phosphor-style icons, and a custom SVG shield.
+- **Glassmorphism UI** — The widget header and sidebar utilize a `backdrop-blur-md` effect combined with semi-transparent backgrounds (`bg-slate-900/90`) for a modern, layered appearance.
+- **Micro-Interactions (Framer Motion)** — Fluid, spring-based animations power the chat bubbles (popping in with a slight bounce), sidebar sliding, and hover-state scaling on buttons.
+- **Floating launcher button** (bottom-right corner) — hidden when the panel is open, featuring an outer glow and smooth scaling on hover.
 - **System status indicator** — a small circular dot next to the "Compliance Assistant" header title, driven by `systemStatus` in Zustand. **Connecting** pulses amber; **online** pulses green; **offline** or **unauthorized** is solid red. Updated once on mount via `initializeSystem()`.
 - **Chat History sidebar** — collapsible drawer grouping past sessions into **Today**, **Previous 7 Days**, and **Older** sections. Empty groups are not rendered.
 - **Inline session rename** — hover any session row to reveal a pencil icon. Clicking it replaces the title text with a small `<input>`. Press **Enter** or click away to save; press **Esc** to cancel.
 - **New Chat button** — available in the sidebar header and as a shortcut in the main header; archives the current session before creating a fresh one.
 - **Session switching** — clicking a past session in the sidebar loads its message history from the gateway API.
 - **Identity badge** — sidebar displays the user's display name extracted from the JWT (see below), falling back to **"You"** when no name is available.
-- **Empty state suggestion pills** — when `messages.length === 0`, three clickable starter prompts appear centered in the chat area: *"What is our cybersecurity policy?"*, *"Check Q2 Compliance."*, and *"Why did control AC-2 fail?"*. Clicking a pill immediately sends that message.
+- **Empty state action cards** — when `messages.length === 0`, three clickable sleek "Action Cards" appear in the chat area: *"What is our cybersecurity policy?"*, *"Check Q2 Compliance."*, and *"Why did control AC-2 fail?"*. Clicking an action card immediately sends that message.
 - **Streaming message feed** — animated blinking cursor while the assistant is composing a reply.
 - **Error banner** — displayed on gateway or network failures with a human-readable message. Auth errors (`401 Unauthorized`) show *"Authentication failed. Please check your session."* instead of raw JSON.
 - **Input locked during streaming** — the send button and input field are disabled while an SSE stream is active, preventing double-sends.
