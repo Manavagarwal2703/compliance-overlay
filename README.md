@@ -161,84 +161,48 @@ data: {"type": "done"}
 
 ## Master Boot Sequence
 
-Follow this exact sequence in **separate terminals** after a fresh clone. All three services must be running for end-to-end functionality.
+Follow these instructions to start the system using the provided automation scripts. All services must be running for end-to-end functionality.
 
 ### Prerequisites
 
 - Node.js 20+
 - Python 3.10+
 - Docker Desktop (for local DB) OR a free Supabase/Neon account (for cloud DB)
+- Bash environment (Linux/macOS or Git Bash on Windows)
 
 ---
 
-### Terminal 1 — PostgreSQL (Docker)
+### Step 1 — Database & Environment Setup
 
-Option A: Local Docker (Client/Enterprise Setup)
-Spin up a local PostgreSQL container in your terminal:
-
-```powershell
-docker run --name gateway-postgres `
-  -e POSTGRES_USER=postgres `
-  -e POSTGRES_PASSWORD=postgres `
-  -e POSTGRES_DB=gateway_db `
-  -p 5432:5432 `
+1. **Database**: Spin up your local PostgreSQL container (or use a cloud DB like Supabase/Neon).
+```bash
+docker run --name gateway-postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=gateway_db \
+  -p 5432:5432 \
   -d postgres:16-alpine
-  ```
-Verify it is running: docker ps --filter name=gateway-postgres
-
-Option B: Free Cloud DB (Supabase / Neon)
-If you do not have Docker installed:
-Go to Supabase or Neon.tech and create a free PostgreSQL project.
-Copy your connection string (e.g., postgresql://user:pass@host/db?sslmode=require).
-Proceed to Terminal 2.
-
-### Terminal 2 — AI Service
-
-```powershell
-cd ai-service
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
-# Edit .env: set GROQ_API_KEY (or set USE_AZURE=true and fill Azure vars)
-
-# --host 0.0.0.0 makes the service reachable from any machine on the network.
-# Omit --reload in dev if you want; it is NEVER used in production.
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-
-Health check: `curl http://localhost:8000/health` → `{"status":"ok","service":"ai-service"}`
+2. **Environment Variables**:
+   - `gateway-service/.env`: Set `DATABASE_URL` and `AI_SERVICE_URL` (e.g. `http://localhost:8000/v1/chat/stream`).
+   - `ai-service/.env`: Set `GROQ_API_KEY` (or Azure settings).
 
 ---
 
-### Terminal 3 — Gateway Service
+### Step 2 — Automated Installation & Startup
 
-```powershell
-cd gateway-service
-npm install
+Run the provided bash scripts from the repository root:
 
-# Create your .env file
-New-Item -Path .env -ItemType File
-
-# ---> IMPORTANT: Open the .env file and add your configuration <---
-# If using Docker (Option A), add: 
-# DATABASE_URL="postgresql://postgres:postgres@localhost:5432/gateway_db"
-#
-# If using Supabase/Neon (Option B), add:
-# DATABASE_URL="postgresql://YOUR_CLOUD_URL_HERE?sslmode=require"
-#
-# Also add:
-# AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
-
-# Push the schema to the database
-npx prisma generate
-npx prisma db push
-
-# Start the Gateway
-npm run dev
+```bash
+chmod +x *.sh
+./install.sh
+./start.sh
 ```
 
-API available at: `http://localhost:3000/api/chat`
+- `install.sh`: Installs npm packages, generates Prisma schema, and sets up the Python virtual environment.
+- `start.sh`: Builds and starts both the Gateway Service (port 3000) and the AI Service (port 8000) in the background.
+
+Check the console output for the successful PIDs.
 
 ---
 
