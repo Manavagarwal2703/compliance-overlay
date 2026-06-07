@@ -224,7 +224,7 @@ The gateway implements an **opt-in memory layer** that injects prior conversatio
 
 ### Memory window
 
-- **5 turns** = up to 10 messages (alternating user/assistant) are included.
+- The Gateway explicitly fetches the last 5 conversation turns (11 messages total) to prevent token overflow.
 - The current user message is sent as the `query` field and is **excluded** from
   `context_history` to avoid duplication.
 - If the Prisma query for history fails, the gateway logs a `warn` and falls back

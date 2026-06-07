@@ -127,6 +127,7 @@ ENABLE_CITATIONS=false
 | `AZURE_OPENAI_DEPLOYMENT_RAG` | `gpt-4o-mini` | No (if Azure) | Deployment name for the RAG path. |
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | No (if Azure) | Embedding deployment used by `ingest.py` when `USE_AZURE=true`. |
 | `CHROMA_PERSIST_DIR` | `./chroma_db` | No | Path (relative to `ai-service/`) where ChromaDB persists the vector store. |
+| `INGEST_DATA_DIR` | `data` | No | Directory where the ingestion script looks for compliance documents. |
 | `ENABLE_CITATIONS` | `false` | No | Set `true` to emit an SSE `sources` event listing source filenames before `done`. |
 
 `python-dotenv` is included in `requirements.txt`. `main.py` loads the `.env` file on startup automatically.
@@ -294,17 +295,17 @@ Liveness probe.
 **Response:** `200 OK`, `Content-Type: text/event-stream`
 
 **Contract C SSE events:**
-
-```
-data: {"type": "token",   "content": "Control AC-2 "}
-data: {"type": "token",   "content": "failed due to missing access reviews."}
-data: {"type": "sources", "content": ["compliance_policy.pdf"]}   ← only if ENABLE_CITATIONS=true
+Documented exact shapes:
+```json
+data: {"type": "token", "content": "Control AC-2 "}
+data: {"type": "token", "content": "failed due to missing access reviews."}
+data: {"type": "sources", "content": ["compliance_policy.pdf"]} 
 data: {"type": "done"}
 ```
+*Note: The `sources` event is **optional** and only emitted if `ENABLE_CITATIONS=true`.*
 
 Error event:
-
-```
+```json
 data: {"type": "error", "content": "LLM provider error: rate limit exceeded"}
 ```
 

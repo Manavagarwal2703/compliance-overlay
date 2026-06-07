@@ -41,6 +41,14 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 
 ---
 
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_GATEWAY_URL` | `http://localhost:3000` | The base URL of the Gateway Service. This is baked into the JavaScript bundle at build time by Vite. |
+
+---
+
 ## Web Component API
 
 **Tag name:** `compliance-chat-overlay`
@@ -198,6 +206,8 @@ On mount, `ChatWidget` calls `initializeSystem()` exactly once. This runs a `Pro
 Both requests include `?userId=${userId || 'dev_user_001'}` (history only) and an `Authorization: Bearer <token>` header when `auth-token` is present.
 
 ### Evaluation logic
+
+The dual-health check logic dictates that the UI is only 'online' if BOTH the History fetch and the AI Health Proxy return `200 OK`.
 
 | Condition | `systemStatus` |
 |---|---|
@@ -411,7 +421,7 @@ Authorization: Bearer <jwt>   ← included only when auth-token attribute is set
 }
 ```
 
-`userId` comes from `useChatStore.userId` (set from `user-id` attribute).
+`userId` comes from `useChatStore.userId` (set from `user-id` attribute). Optional in the JSON body, it falls back to `dev_user_001` in the code.
 `role` comes from `useChatStore.userRole` (set from `user-role` attribute).
 
 > **Note:** When the gateway runs with `REQUIRE_AUTH=true`, the `Authorization` header is mandatory and `userId` in the body is ignored — the gateway extracts it from the verified JWT instead.

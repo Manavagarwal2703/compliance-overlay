@@ -98,7 +98,7 @@ These three contracts are the **only** coupling between modules. Changing any fi
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `sessionId` | `string` | **Yes** | Client-generated stable session identifier (format: `sess_<timestamp>_<random>`) |
-| `userId` | `string` | Conditional | User ID from the `user-id` HTML attribute. **Ignored by the gateway when `REQUIRE_AUTH=true`** — the gateway extracts `userId` from the verified JWT instead. Still required in the body when `REQUIRE_AUTH=false`. |
+| `userId` | `string` | Optional | User ID from the `user-id` HTML attribute. **Ignored by the gateway when `REQUIRE_AUTH=true`** — the gateway extracts `userId` from the verified JWT instead. Optional in the JSON body when `REQUIRE_AUTH=false`, falling back to `dev_user_001` in the code. |
 | `role` | `"user"` \| `"reviewer"` | **Yes** | Active persona; affects AI routing in the semantic router |
 | `message` | `string` | **Yes** | The user's message text |
 
@@ -122,18 +122,27 @@ These three contracts are the **only** coupling between modules. Changing any fi
 ```json
 {
   "conversation_id": "sess_1748956800_abc123",
-  "role": "reviewer",
+  "role": "user",
   "query": "Check Q2 compliance status.",
-  "context_history": []
+  "context_history": [
+    {
+      "role": "user",
+      "content": "What controls were reviewed?"
+    },
+    {
+      "role": "assistant",
+      "content": "Controls CC1-CC5 were reviewed."
+    }
+  ]
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `conversation_id` | `string` | Mapped from Contract A `sessionId` |
-| `role` | `"user"` \| `"reviewer"` | Forwarded directly from Contract A |
+| `role` | `"user"` | Hardcoded to `"user"` by the gateway (Contract B always receives `"user"`) |
 | `query` | `string` | Mapped from Contract A `message` |
-| `context_history` | `Array<{ role, content }>` | Prior conversation turns (currently sent as empty array; hydration TBD) |
+| `context_history` | `Array<{ role, content }>` | The Gateway fetches the last 5 conversation turns (11 messages total) to prevent token overflow if `ENABLE_AI_MEMORY=true`, otherwise `[]` |
 
 **Response:** `200 OK` with `Content-Type: text/event-stream` (Contract C).
 
@@ -153,15 +162,25 @@ data: {"type": "done"}
 | `type` | Extra fields | Meaning |
 |--------|-------------|---------|
 | `token` | `content: string` | Incremental assistant text chunk |
-| `sources` | `content: string[]` | **Optional.** Deduplicated list of source filenames retrieved from ChromaDB. Only emitted when `ENABLE_CITATIONS=true` in the AI service. Always sent **before** `done`. |
+| `sources` | `content: string[]` | **Optional.** Deduplicated list of source filenames retrieved from ChromaDB. Only emitted if `ENABLE_CITATIONS=true`. Always sent **before** `done`. |
 | `done` | — | Stream is complete; client should finalise the message |
-| `error` | `content?: string` | Stream failed; client should show an error state |
+| `error` | `content: string` | Stream failed; client should show an error state |
+
+### Master Health & Status Logic
+
+The system implements a dual-health check logic: The UI is only 'online' if BOTH the History fetch and the AI Health Proxy return `200 OK`.
+The `systemStatus` states are:
+- `connecting`: Connecting to services.
+- `online`: Both probes succeeded.
+- `offline`: Health or history probe failed.
+- `unauthorized`: History probe returned `401`.
 
 ---
 
 ## Master Boot Sequence
 
-Follow these instructions to start the system using the provided automation scripts. All services must be running for end-to-end functionality.
+Follow these instructions to start the system using the provided automation scripts. 
+**Note:** `./install.sh` and `./start.sh` are the exclusively supported scripts and the **only** way to initialize and run the production environment.
 
 ### Prerequisites
 
@@ -238,118 +257,13 @@ curl "http://localhost:3000/api/chat/history/sess_smoke"
 
 ---
 
-## Production Deployment (Enterprise Intranet)
+## Security Master Table
 
-Use these instructions when deploying to a **production or intranet server**. The development commands in the section above use file-watchers and hot-reload — they must **never** be used in production.
-
-### Prerequisites
-
-- Node.js 20+ installed on the gateway server
-- Python 3.10+ installed on the AI service server
-- PostgreSQL accessible from the gateway server (intranet IP or managed cloud)
-- All three `.env` files configured with **real intranet IPs** (not `localhost`)
-
----
-
-### Step 1 — Configure Environment Variables
-
-Each module ships a `.env.example` that is safe to commit. Copy it to `.env` and fill in the real values before starting any service.
-
-```powershell
-# Gateway service
-copy gateway-service\.env.example gateway-service\.env
-# Edit gateway-service\.env — set DATABASE_URL and AI_SERVICE_URL
-
-# AI service
-copy ai-service\.env.example ai-service\.env
-# Edit ai-service\.env — set GROQ_API_KEY or Azure OpenAI vars
-```
-
-> **Critical:** `AI_SERVICE_URL` in `gateway-service/.env` must be the **intranet IP** of the machine running the AI service, not `localhost`. If the two services run on different servers and you leave it as `localhost`, the gateway will try to call itself and fail immediately.
-
----
-
-### Step 2 — Start the AI Service
-
-```powershell
-cd ai-service
-.\.venv\Scripts\Activate.ps1   # activate the virtual environment
-
-# Production start — no --reload flag, bound to all interfaces.
-# --host 0.0.0.0 is REQUIRED: without it, uvicorn binds only to 127.0.0.1
-# and the gateway on a different intranet IP will receive "connection refused".
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-Optional: add `--workers 2` (or more) to utilise multiple CPU cores:
-
-```powershell
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
-```
-
-Verify: `curl http://<AI_SERVICE_HOST_IP>:8000/health` → `{"status":"ok","service":"ai-service"}`
-
----
-
-### Step 3 — Build and Start the Gateway Service
-
-```powershell
-cd gateway-service
-npm install
-npx prisma generate
-npx prisma db push     # applies schema to the production database
-
-# Build the Next.js app (compiles, tree-shakes, optimises).
-npm run build
-
-# Start in production mode — no hot-reload, no file watchers.
-# This runs the compiled output from .next/ using the Node.js production runtime.
-npm run start
-```
-
-Gateway available at: `http://<GATEWAY_HOST_IP>:3000/api/chat`
-
----
-
-### Step 4 — Build and Serve the Widget Client
-
-The widget is a static bundle — it is not a running server. Build it once and serve the output file from any static file server or CDN.
-
-```powershell
-cd widget-client
-npm install
-
-# Set the gateway URL for the production build.
-# Create a .env.production file:
-"VITE_GATEWAY_URL=http://<GATEWAY_HOST_IP>:3000" | Out-File -Encoding utf8 .env.production
-
-# Build the static bundle.
-npm run build
-# Output: dist/compliance-chat-overlay.es.js and dist/compliance-chat-overlay.iife.js
-```
-
-Serve the `dist/` folder from IIS, Nginx, or any intranet static file host. Then embed the widget in your host application:
-
-```html
-<script type="module" src="http://<STATIC_HOST_IP>/compliance-chat-overlay.es.js"></script>
-<compliance-chat-overlay
-  gateway-url="http://<GATEWAY_HOST_IP>:3000/api/chat"
-  user-role="reviewer"
-  user-id="usr_abc123"
-></compliance-chat-overlay>
-```
-
----
-
-### Production Deployment Summary
-
-| Service | Command | Notes |
-|---------|---------|-------|
-| AI Service | `uvicorn app.main:app --host 0.0.0.0 --port 8000` | No `--reload`. `--host 0.0.0.0` is mandatory for intranet access. |
-| Gateway | `npm run build` then `npm run start` | Never use `npm run dev` in production. |
-| Widget | `npm run build` then serve `dist/` statically | Not a running server — just a static JS file. |
-
----
+| Variable | Description |
+|----------|-------------|
+| `REQUIRE_AUTH` | Controls how it enables/bypasses JWT verification. |
+| `JWT_SECRET` | Used for HS256 verification of the JWT. |
+| `ALLOWED_ORIGINS` | Determines how CORS whitelists the frontend URL. |
 
 ## Environment Variables
 
@@ -357,7 +271,7 @@ Serve the `dist/` folder from IIS, Nginx, or any intranet static file host. Then
 |---------|----------|---------|---------|
 | Gateway | `DATABASE_URL` | — | **Required.** PostgreSQL connection string |
 | Gateway | `AI_SERVICE_URL` | — | **Required.** Full URL to ai-service `/v1/chat/stream`. Use intranet IP, not localhost. |
-| Gateway | `NEXT_PUBLIC_GATEWAY_URL` | — | Optional. Public base URL of this gateway (for self-referential links). |
+| Gateway | `ENABLE_AI_MEMORY` | `true` | When `true`, injects prior conversation turns into Contract B payload. |
 | Gateway | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` requires `Authorization: Bearer <JWT>`. When `false`, bypasses JWT check and trusts `userId` from the request body (dev only). |
 | Gateway | `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`  |
 | Gateway | `ALLOWED_ORIGINS` | `""` (wildcard `*`) | Comma-separated origin allowlist for CORS. Empty = `Access-Control-Allow-Origin: *` (dev only). |
@@ -372,6 +286,7 @@ Serve the `dist/` folder from IIS, Nginx, or any intranet static file host. Then
 | AI | `AZURE_OPENAI_DEPLOYMENT_RAG` | `gpt-4o-mini` | RAG deployment name |
 | AI | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | `text-embedding-3-large` | Embedding deployment name |
 | AI | `CHROMA_PERSIST_DIR` | `./chroma_db` | Path (relative to `ai-service/`) where ChromaDB persists the vector store |
+| AI | `INGEST_DATA_DIR` | `data` | Directory from which the ingestion script loads documents |
 | AI | `ENABLE_CITATIONS` | `false` | Set `true` to emit an SSE `sources` event with source filenames before `done` |
 
 See [ai-service/.env.example](./ai-service/.env.example) for the full template.
