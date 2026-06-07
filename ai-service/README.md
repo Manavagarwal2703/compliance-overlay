@@ -329,7 +329,7 @@ If the query passes the guardrail, an LLM extracts the required context paramete
 - `needs_kb` (bool): Does the query require knowledge base data (policies, rules)?
 - `needs_report` (bool): Does it require compliance report data?
 - `controls_mentioned` (list[str]): Any specific controls mentioned (e.g., AC-2)?
-- `is_general_chat` (bool): Is the query a greeting, small talk, or a general knowledge question that has **no** compliance context? When `True` and neither `needs_kb` nor `needs_report` is set, the pipeline takes the **GENERAL_CHAT** fast path, skipping all fetchers.
+- `is_general_chat` (bool): Is the query a professional greeting or a general industry knowledge question? When `True` and neither `needs_kb` nor `needs_report` is set, the pipeline takes the **GENERAL_CHAT** fast path, skipping all fetchers. Note: Unprofessional queries (e.g., jokes, stories) explicitly force ALL flags to `False` to route into the strict refusal path.
 
 ### Step 3: Context Fetchers (ChromaDB)
 
@@ -348,9 +348,9 @@ Based on the extraction result, the Synthesizer selects one of two system prompt
 
 The **General Intelligence** prompt is injected:
 
-> *"You are a helpful and intelligent AI assistant. Answer the user's general questions using your broad general knowledge…"*
+> *"You are a Professional Compliance Assistant. You can answer professional greetings and broad industry questions using your general knowledge…"*
 
-No context fetchers are executed, so this path has lower latency. The LLM answers from its pre-trained knowledge.
+No context fetchers are executed, so this path has lower latency. The LLM answers from its pre-trained knowledge but is strictly instructed to refuse non-professional requests (like telling jokes) with a standard refusal message.
 
 #### `COMPLIANCE_RAG` path — all other cases
 

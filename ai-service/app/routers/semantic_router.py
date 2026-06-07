@@ -199,18 +199,18 @@ class QueryExtraction(BaseModel):
     )
     is_general_chat: bool = Field(
         description=(
-            "True if the query is a greeting, small talk, or a question that can be "
-            "answered from general world knowledge — WITHOUT needing any internal company "
-            "documents. "
-            "IMPORTANT: Industry-standard definitions and concepts are general knowledge. "
+            "True ONLY for professional greetings or general industry knowledge "
+            "(e.g., 'What is AI?', 'Explain GDPR') that can be answered from general world "
+            "knowledge WITHOUT needing any internal company documents. "
+            "Explicitly False for entertainment, jokes, stories, or non-professional chatter. "
             "Examples that are TRUE: "
             "'hi', 'hello', 'what is AI?', 'what is cybersecurity?', "
             "'what is encryption?', 'explain zero-trust', 'what is GDPR?', "
-            "'how are you?', 'tell me a joke', 'what is machine learning'. "
-            "Examples that are FALSE (compliance-specific): "
+            "'how are you?', 'what is machine learning'. "
+            "Examples that are FALSE: "
+            "'tell me a joke', 'write a story', 'play a game' (non-professional), or "
             "'what does our policy say about access control?', "
-            "'did control AC-2 pass?', 'show me Q2 audit results', "
-            "'what controls should we remediate?'."
+            "'did control AC-2 pass?' (compliance-specific)."
         )
     )
 
@@ -222,7 +222,11 @@ async def extract_entities(query: str, llm) -> QueryExtraction:
             "You are a query classifier for a compliance chatbot. "
             "Classify the user query across four dimensions. "
             "Apply this critical rule first:\n\n"
-            "CRITICAL RULE — General knowledge vs. Internal documents:\n"
+            "CRITICAL RULE 1 — Professionalism Rule:\n"
+            "  - If a query is unprofessional or for entertainment (e.g., jokes, stories, games, etc.), "
+            "you MUST set ALL flags (is_general_chat, needs_kb, needs_report) to False. "
+            "This forces the query into a strict refusal path.\n\n"
+            "CRITICAL RULE 2 — General knowledge vs. Internal documents:\n"
             "  - Questions about broad industry concepts, definitions, or standards "
             "(e.g. 'what is cybersecurity?', 'what is encryption?', 'explain zero-trust', "
             "'what is GDPR?', 'what is AI?') are GENERAL KNOWLEDGE. "
@@ -366,9 +370,13 @@ _STRICT_SYSTEM_PROMPT = (
 )
 
 _GENERAL_INTELLIGENCE_PROMPT = (
-    "You are a helpful and intelligent AI assistant. "
-    "Answer the user's general questions using your broad general knowledge. "
-    "Be concise, accurate, and friendly. "
+    "You are a Professional Compliance Assistant. "
+    "You can answer professional greetings and broad industry questions using your general knowledge. "
+    "Be concise, accurate, and professional. "
+    "You must strictly refuse to engage in non-professional behavior. Do not tell jokes, "
+    "do not write stories, and do not perform entertainment tasks. "
+    "If the user asks for anything unprofessional, respond EXACTLY with this standard refusal message: "
+    "'I am a specialized compliance assistant and can only assist with professional or policy-related inquiries.' "
     "If the user asks a question that relates to compliance, audits, or security controls, "
     "let them know you can answer compliance-specific questions more precisely if they "
     "provide the relevant policy or report context."
