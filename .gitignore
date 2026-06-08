@@ -57,3 +57,12 @@ desktop.ini
 *.ntvs*
 *.njsproj
 *.sln
+
+
+
+
+# SQLite database files
+*.sqlite
+*.sqlite-journal
+gateway_db.sqlite
+gateway_db.sqlite-journal
