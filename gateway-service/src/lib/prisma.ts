@@ -1,17 +1,15 @@
-import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { PrismaClient } from "@prisma/client";
 
 /**
  * Prisma 7 uses a Wasm-based "client" engine that requires a driver adapter.
  * The native Rust "library" engine was removed in Prisma 7.
  *
- * We use @prisma/adapter-pg so the client engine can talk to PostgreSQL,
- * whether the database is running on Supabase or Docker — just point
- * DATABASE_URL at the right host.
+ * We use @prisma/adapter-better-sqlite3 so the client engine can talk to a local
+ * SQLite database via the better-sqlite3 driver.
  *
  * DATABASE_URL examples:
- *   Supabase: postgresql://postgres:<pw>@db.<ref>.supabase.co:5432/postgres
- *   Docker:   postgresql://postgres:<pw>@localhost:5432/postgres
+ *   SQLite: file:./gateway_db.sqlite
  *
  * Singleton pattern: in development Next.js hot-reloads create new module
  * instances on every save. Without this, each reload leaks a new connection
@@ -28,11 +26,12 @@ function createPrismaClient(): PrismaClient {
   if (!connectionString) {
     throw new Error(
       "DATABASE_URL is not set. " +
-        "Add it to .env (Supabase URL or Docker postgres URL)."
+        "Add it to .env (SQLite file path)."
     );
   }
 
-  const adapter = new PrismaPg({ connectionString });
+  const dbPath = connectionString.startsWith('file:') ? connectionString.replace('file:', '') : connectionString;
+  const adapter = new PrismaBetterSqlite3({ url: dbPath });
 
   return new PrismaClient({
     adapter,

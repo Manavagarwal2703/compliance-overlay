@@ -33,7 +33,7 @@ flowchart TB
 
   subgraph gateway["gateway-service  :3000"]
     API["Next.js 16 App Router\nNode.js runtime"]
-    DB["PostgreSQL via Prisma 7"]
+    DB["SQLite via Prisma 7"]
     HP["Health Proxy\n(GET /api/health)"]
   end
 
@@ -62,7 +62,7 @@ flowchart TB
 | Module | Port (dev) | Responsibility | Stack |
 |--------|------------|----------------|-------|
 | [widget-client](./widget-client/) | 5173 | Shadow DOM Web Component, chat UI, session history sidebar, SSE client. Dual health check on mount; input locked during streaming. | React 19, Vite 6, Zustand 5, Tailwind CSS 3 |
-| [gateway-service](./gateway-service/) | 3000 | JWT auth, session upsert, message persistence, SSE stream proxy, AI health proxy | Next.js 16.1.4, Prisma 7, PostgreSQL |
+| [gateway-service](./gateway-service/) | 3000 | JWT auth, session upsert, message persistence, SSE stream proxy, AI health proxy | Next.js 16.1.4, Prisma 7, SQLite |
 | [ai-service](./ai-service/) | 8000 | Context Aggregator Pipeline (Guardrail → Extractor → Fetchers → Synthesizer), ChromaDB RAG retrieval, LLM streaming | FastAPI, LangChain, Groq / Azure OpenAI |
 
 **Isolation rule:** No shared packages, no monorepo libs, no cross-folder imports. Integration is HTTP-contract-only.
@@ -164,7 +164,7 @@ These three contracts are the **only** coupling between modules. Changing any fi
 | `conversation_id` | `string` | Mapped from Contract A `sessionId` |
 | `role` | `"user"` | **Always hardcoded to `"user"` by the gateway.** The original widget `role` (e.g. `"reviewer"`) is stored in the session record but never forwarded to the AI service. |
 | `query` | `string` | Mapped from Contract A `message` |
-| `context_history` | `Array<{ role, content }>` | Prior conversation turns. When `ENABLE_AI_MEMORY=true`, the gateway fetches the last 5 turns (up to 10 messages) from Postgres to prevent token overflow. When `false`, always `[]`. |
+| `context_history` | `Array<{ role, content }>` | Prior conversation turns. When `ENABLE_AI_MEMORY=true`, the gateway fetches the last 5 turns (up to 10 messages) from SQLite to prevent token overflow. When `false`, always `[]`. |
 
 **Response:** `200 OK` with `Content-Type: text/event-stream` (Contract C).
 
@@ -232,29 +232,17 @@ The widget implements a **dual health check** on mount via `initializeSystem()`,
 
 - Node.js 20+
 - Python 3.10+
-- Docker Desktop (for local DB) OR a free Supabase/Neon account (for cloud DB)
 - Bash environment (Linux/macOS or Git Bash on Windows)
 
 ---
 
-### Step 1 — Database & Environment Setup
+### Step 1 — Environment Setup
 
-1. **Database**: Spin up your local PostgreSQL container (or use a cloud DB like Supabase/Neon).
-
-```bash
-docker run --name gateway-postgres \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=gateway_db \
-  -p 5432:5432 \
-  -d postgres:16-alpine
-```
-
-2. **Environment Variables**:
-   - `gateway-service/.env`: Set `DATABASE_URL` and `AI_SERVICE_URL` (e.g. `http://localhost:8000/v1/chat/stream`).
+1. **Environment Variables**:
+   - `gateway-service/.env`: Set `DATABASE_URL` to the local SQLite file (e.g. `DATABASE_URL="file:./gateway_db.sqlite"`) and configure `AI_SERVICE_URL`.
    - `ai-service/.env`: Set `GROQ_API_KEY` (or Azure settings).
 
-3. **Push the database schema** (first time only):
+2. **Push the database schema** (first time only):
 
 ```bash
 cd gateway-service
@@ -341,7 +329,7 @@ curl "http://localhost:3000/api/chat/history/sess_smoke"
 
 | Service | Variable | Default | Purpose |
 |---------|----------|---------|---------| 
-| Gateway | `DATABASE_URL` | — | **Required.** PostgreSQL connection string |
+| Gateway | `DATABASE_URL` | — | **Required.** SQLite connection string (e.g. `file:./gateway_db.sqlite`) |
 | Gateway | `AI_SERVICE_URL` | — | **Required.** Full URL to ai-service `/v1/chat/stream`. Use intranet IP, not `localhost`, when services are on different hosts. |
 | Gateway | `ENABLE_AI_MEMORY` | `true` | When `true`, injects prior conversation turns into Contract B `context_history`. |
 | Gateway | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` and `GET /api/chat/history` require `Authorization: Bearer <JWT>`. When `false`, bypasses JWT check (dev only). |

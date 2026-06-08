@@ -1,6 +1,6 @@
 # Gateway Service
 
-Next.js 16 API orchestration layer: **multi-tenant session tracking**, **PostgreSQL persistence via Prisma 7**, **JWT authentication**, and **zero-copy SSE stream proxying** between the widget client and the AI microservice. It imports nothing from the widget or AI service modules — only the shared HTTP contracts define the coupling surface.
+Next.js 16 API orchestration layer: **multi-tenant session tracking**, **SQLite persistence via Prisma 7**, **JWT authentication**, and **zero-copy SSE stream proxying** between the widget client and the AI microservice. It imports nothing from the widget or AI service modules — only the shared HTTP contracts define the coupling surface.
 
 ---
 
@@ -10,7 +10,7 @@ Next.js 16 API orchestration layer: **multi-tenant session tracking**, **Postgre
 sequenceDiagram
   participant W as widget-client
   participant G as gateway-service
-  participant DB as PostgreSQL
+  participant DB as SQLite
   participant A as ai-service
 
   W->>G: POST /api/chat (Contract A)
@@ -26,7 +26,7 @@ sequenceDiagram
   G->>DB: prisma.message.create() [role: "assistant", full assembled text]
 ```
 
-The gateway uses a `TransformStream` to forward raw SSE bytes to the widget **immediately** (zero buffering). In parallel, it accumulates token payloads in memory. When the upstream stream ends, `TransformStream.flush()` persists the fully assembled assistant reply as a single `Message` row in Postgres.
+The gateway uses a `TransformStream` to forward raw SSE bytes to the widget **immediately** (zero buffering). In parallel, it accumulates token payloads in memory. When the upstream stream ends, `TransformStream.flush()` persists the fully assembled assistant reply as a single `Message` row in SQLite.
 
 ---
 
@@ -38,7 +38,7 @@ The gateway uses a `TransformStream` to forward raw SSE bytes to the widget **im
 | React | 19.0.0 |
 | TypeScript | 5.7+ |
 | Prisma | 7.x |
-| PostgreSQL | 16 |
+| SQLite | better-sqlite3 |
 | Runtime | Node.js (standard App Router — no Edge runtime) |
 
 ---
@@ -46,34 +46,7 @@ The gateway uses a `TransformStream` to forward raw SSE bytes to the widget **im
 ## Prerequisites
 
 - Node.js 20+
-- Docker Desktop (for local PostgreSQL)
 - `ai-service` running on port **8000**
-
----
-
-## Local PostgreSQL Setup (Docker)
-
-```powershell
-docker run --name gateway-postgres `
-  -e POSTGRES_USER=postgres `
-  -e POSTGRES_PASSWORD=postgres `
-  -e POSTGRES_DB=gateway_db `
-  -p 5432:5432 `
-  -d postgres:16-alpine
-```
-
-Verify it is running:
-
-```powershell
-docker ps --filter name=gateway-postgres
-```
-
-Stop and remove the container when done:
-
-```powershell
-docker stop gateway-postgres
-docker rm gateway-postgres
-```
 
 ---
 
@@ -82,8 +55,8 @@ docker rm gateway-postgres
 Create a `.env` file in the `gateway-service` directory:
 
 ```env
-# PostgreSQL connection string (matches the Docker command above)
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/gateway_db"
+# Local SQLite connection string
+DATABASE_URL="file:./gateway_db.sqlite"
 
 # AI microservice endpoint (Contract B)
 AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
@@ -91,7 +64,7 @@ AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | — | **Required.** Full PostgreSQL connection string. Read by `prisma.config.ts`. |
+| `DATABASE_URL` | — | **Required.** Full SQLite connection string (e.g. `file:./gateway_db.sqlite`). Read by `prisma.config.ts`. |
 | `AI_SERVICE_URL` | — | **Required.** Contract B endpoint for the AI service. Use the intranet IP when services are on different hosts — do **not** use `localhost` in that case. |
 | `ENABLE_AI_MEMORY` | `true` | When `true`, fetches the last 5 conversation turns from Postgres and injects them into the Contract B `context_history` array. When `false`, always sends `context_history: []`. Does **not** affect the history API endpoints. |
 | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` and `GET /api/chat/history` require a valid `Authorization: Bearer <JWT>` header. When `false`, skips JWT verification and trusts `userId` in the JSON body (dev / bypass mode). |
@@ -195,18 +168,18 @@ The gateway implements an **opt-in memory layer** that injects prior conversatio
 
 | `ENABLE_AI_MEMORY` | `context_history` in Contract B | History API (`GET /api/chat/history`) |
 |---|---|---|
-| `true` | Last 5 turns fetched from Postgres (up to 10 messages) | **Always works** — reads directly from DB |
+| `true` | Last 5 turns fetched from SQLite (up to 10 messages) | **Always works** — reads directly from DB |
 | `false` | Always `[]` — AI has no memory of prior turns | **Always works** — reads directly from DB |
 
 > [!IMPORTANT]
 > `ENABLE_AI_MEMORY` controls **only** the Contract B payload forwarded to the AI service.
 > It has zero effect on the `GET /api/chat/history` and `GET /api/chat/history/:sessionId`
-> endpoints. Those endpoints always query Postgres, so the UI sidebar continues to display
+> endpoints. Those endpoints always query SQLite, so the UI sidebar continues to display
 > all past sessions and messages regardless of this flag.
 
 ### Memory window (exact implementation)
 
-The gateway fetches `MEMORY_TURNS * 2 + 1 = 11` messages from Postgres (ordered by `createdAt DESC`), then **drops the first row** (the current user message just inserted) via `slice(1)`, and reverses to chronological order. This yields at most **10 prior messages** (5 complete user+assistant turns) in `context_history`.
+The gateway fetches `MEMORY_TURNS * 2 + 1 = 11` messages from SQLite (ordered by `createdAt DESC`), then **drops the first row** (the current user message just inserted) via `slice(1)`, and reverses to chronological order. This yields at most **10 prior messages** (5 complete user+assistant turns) in `context_history`.
 
 The current user message is sent as the `query` field and is **excluded** from `context_history` to avoid duplication. If the Prisma query for history fails, the gateway logs a `warn` and falls back to `context_history: []` — the request still proceeds normally.
 
@@ -645,7 +618,7 @@ All error and warning paths in `src/app/api/chat/route.ts` use the `logger` util
 
 ## Prisma Client Singleton
 
-`src/lib/prisma.ts` uses the standard Next.js development pattern to avoid exhausting the PostgreSQL connection pool during hot-reloads:
+`src/lib/prisma.ts` uses the standard Next.js development pattern to avoid exhausting the database connection pool during hot-reloads:
 
 ```typescript
 const globalForPrisma = globalThis as unknown as {
