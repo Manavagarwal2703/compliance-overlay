@@ -7,6 +7,7 @@ echo "--> Gateway Service: npm install & prisma generate"
 cd gateway-service
 npm install
 npx prisma generate
+npx prisma db push
 cd ..
 
 echo "--> AI Service: creating .venv & installing requirements"
