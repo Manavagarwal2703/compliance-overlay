@@ -369,7 +369,7 @@ _STRICT_SYSTEM_PROMPT = (
     "'I do not have enough information to answer this question.' "
     "Do not speculate, do not hallucinate, and do not draw on any knowledge "
     "outside the provided context. "
-    "Always cite the source document name when referencing a specific fact.\n\n"
+    "DO NOT manually append source names or citations to your text response.\n\n"
     "{context_block}"
 )
 
