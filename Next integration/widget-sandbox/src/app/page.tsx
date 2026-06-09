@@ -1,4 +1,6 @@
 import Image from "next/image";
+import ChatbotWidget from '../components/ChatbotWidget';
+
 
 export default function Home() {
   return (
@@ -59,6 +61,7 @@ export default function Home() {
             Documentation
           </a>
         </div>
+        <ChatbotWidget />
       </main>
     </div>
   );
