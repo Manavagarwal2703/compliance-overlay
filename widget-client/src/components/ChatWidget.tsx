@@ -116,12 +116,6 @@ function resolveTitle(session: ChatSession): string {
   return "New Chat";
 }
 
-const EMPTY_SUGGESTIONS = [
-  "What is our cybersecurity policy?",
-  "Check Q2 Compliance.",
-  "Why did control AC-2 fail?",
-] as const;
-
 // ---------------------------------------------------------------------------
 // Sub-component: Individual session item with inline rename
 // ---------------------------------------------------------------------------
@@ -442,6 +436,7 @@ export function ChatWidget() {
   const newSession = useChatStore((s) => s.newSession);
   const initializeSystem = useChatStore((s) => s.initializeSystem);
   const systemStatus = useChatStore((s) => s.systemStatus);
+  const suggestions = useChatStore((s) => s.suggestions);
   const { sendMessage, isStreaming } = useChatStream();
 
   const chatEnabled = systemStatus === "online";
@@ -671,7 +666,7 @@ export function ChatWidget() {
                   Ask about compliance, policies, or audits.
                 </p>
                 <div className="flex w-full flex-col items-stretch gap-2 px-4">
-                  {EMPTY_SUGGESTIONS.map((suggestion, idx) => (
+                  {suggestions.map((suggestion, idx) => (
                     <motion.button
                       initial={{ opacity: 0, y: 15 }}
                       animate={{ opacity: 1, y: 0 }}

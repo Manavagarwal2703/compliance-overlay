@@ -376,6 +376,7 @@ This produces `dist/compliance-chat-overlay.es.js` (ES module) and `dist/complia
   user-role="reviewer"
   user-id="usr_abc123"
   auth-token="<jwt-from-your-auth-provider>"
+  suggestions='["What is the VPN policy?", "Check server compliance", "Audit logs summary"]'
 ></compliance-chat-overlay>
 ```
 
@@ -388,6 +389,7 @@ This produces `dist/compliance-chat-overlay.es.js` (ES module) and `dist/complia
 | `gateway-url` | **Yes** (production) | Full URL to the gateway `/api/chat` endpoint, e.g. `http://192.168.1.100:3000/api/chat`. In dev the widget falls back to `VITE_GATEWAY_URL` from `.env`. |
 | `open` | No | `"true"` to open the chat panel immediately on mount |
 | `auth-token` | Conditional | JWT Bearer token. **Required in production** when gateway `REQUIRE_AUTH=true`. Omit for dev when `REQUIRE_AUTH=false`. |
+| `suggestions` | No | JSON-stringified array of strings to override the default empty state suggestions. |
 
 ---
 

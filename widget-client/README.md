@@ -65,6 +65,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 | `gateway-url` | URL string | No | Override the Contract A endpoint. Default: `http://localhost:3000/api/chat` |
 | `open` | `"true"` | No | If present and `"true"`, the chat panel opens immediately on mount. |
 | `auth-token` | JWT string | No | Optional JWT Bearer token issued by your authentication provider. When provided, every Contract A POST includes an `Authorization: Bearer <token>` header. Required by the gateway when `REQUIRE_AUTH=true`. Omit entirely for dev/bypass mode. |
+| `suggestions` | JSON string | No | Optional JSON-stringified array of strings to override the default Action Cards shown in the empty state. |
 
 > **Important:** `user-role` and `user-id` are set by the **host application** and cannot be changed from inside the widget UI. Changing them via `setAttribute()` after mount is fully supported — `attributeChangedCallback` in `mount.tsx` propagates the new values into the Zustand store automatically.
 
@@ -84,6 +85,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
   user-role="reviewer"
   user-id="usr_abc123"
   auth-token="<jwt-from-your-auth-provider>"
+  suggestions='["What is the VPN policy?", "Check server compliance", "Audit logs summary"]'
 ></compliance-chat-overlay>
 ```
 

@@ -60,6 +60,9 @@ type ChatState = {
   // ── Gateway ─────────────────────────────────────────────────────────────────
   gatewayUrl: string;
 
+  // ── UI Data ─────────────────────────────────────────────────────────────────
+  suggestions: string[];
+
   // ── Auth ──────────────────────────────────────────────────────────────────────
   /**
    * Optional JWT Bearer token injected from the `auth-token` HTML attribute.
@@ -77,6 +80,7 @@ type ChatState = {
   setAuthToken: (token: string | null) => void;
   toggleOpen: () => void;
   setOpen: (open: boolean) => void;
+  setSuggestions: (suggestions: string[]) => void;
 
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
@@ -213,6 +217,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isSidebarOpen: false,
   systemStatus: "connecting",
 
+  // ── UI Data ───────────────────────────────────────────────────────────────
+  suggestions: [
+    "What is our cybersecurity policy?",
+    "Check Q2 Compliance.",
+    "Why did control AC-2 fail?",
+  ],
+
   // ── Auth ──────────────────────────────────────────────────────────────────────
   authToken: null,
 
@@ -240,6 +251,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
 
   setOpen: (open) => set({ isOpen: open }),
+
+  setSuggestions: (suggestions) => set({ suggestions }),
 
   toggleSidebar: () => set((s) => ({ isSidebarOpen: !s.isSidebarOpen })),
 

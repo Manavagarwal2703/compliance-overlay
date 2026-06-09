@@ -12,7 +12,7 @@ class ComplianceChatElement extends HTMLElement {
   private styleEl: HTMLStyleElement | null = null;
 
   static get observedAttributes(): string[] {
-    return ["gateway-url", "open", "user-role", "user-id", "auth-token"];
+    return ["gateway-url", "open", "user-role", "user-id", "auth-token", "suggestions"];
   }
 
   connectedCallback(): void {
@@ -56,6 +56,19 @@ class ComplianceChatElement extends HTMLElement {
     // Authorization: Bearer <token> on every Contract A POST request.
     const authToken = this.getAttribute("auth-token");
     useChatStore.getState().setAuthToken(authToken ?? null);
+
+    // Read custom suggestions from the host. Must be a JSON-stringified array of strings.
+    const suggestionsAttr = this.getAttribute("suggestions");
+    if (suggestionsAttr) {
+      try {
+        const parsed = JSON.parse(suggestionsAttr);
+        if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
+          useChatStore.getState().setSuggestions(parsed);
+        }
+      } catch (e) {
+        console.error("Invalid JSON in 'suggestions' attribute", e);
+      }
+    }
 
     // ── Mount React tree ────────────────────────────────────────────────────
     this.reactRoot = createRoot(mountPoint);
@@ -105,6 +118,18 @@ class ComplianceChatElement extends HTMLElement {
       }
       case "auth-token":
         useChatStore.getState().setAuthToken(newValue ?? null);
+        break;
+      case "suggestions":
+        if (newValue) {
+          try {
+            const parsed = JSON.parse(newValue);
+            if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
+              useChatStore.getState().setSuggestions(parsed);
+            }
+          } catch (e) {
+            console.error("Invalid JSON in 'suggestions' attribute", e);
+          }
+        }
         break;
     }
   }
