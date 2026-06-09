@@ -164,6 +164,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 }
 ```
 
+
+```tsx
+{token ? <ChatbotWidget token={token} /> : null}
+```
+Above is to hide while logged out. To be updated in pages.tsx
+
 ## 5. Authentication Handoff
 The web component requires a valid JWT to authorize requests to the chat API. 
 The Parent App developers must:
