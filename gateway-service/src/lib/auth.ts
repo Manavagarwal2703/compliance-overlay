@@ -24,6 +24,7 @@ type JwtPayload = {
   sub?: string;
   userId?: string;
   exp?: number;
+
   [key: string]: unknown;
 };
 
@@ -114,4 +115,32 @@ export function extractUserId(payload: JwtPayload): string {
     );
   }
   return id;
+}
+
+
+
+// ---------------------------------------------------------------------------
+// extractToken
+// ---------------------------------------------------------------------------
+// Extracts a JWT from the Authorization header or fallback HttpOnly cookies.
+// ---------------------------------------------------------------------------
+export function extractToken(request: Request): string | null {
+  const authHeader = request.headers.get("Authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+
+  // Fallback for local sandbox testing
+  if (process.env.NODE_ENV !== "production") {
+    const cookieHeader = request.headers.get("cookie");
+    if (cookieHeader) {
+      // Support common JWT cookie names used in Next.js
+      const match = cookieHeader.match(/(?:^|;\s*)(?:token|jwt|auth_token)=([^;]*)/);
+      if (match) {
+        return match[1].trim();
+      }
+    }
+  }
+
+  return null;
 }

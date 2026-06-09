@@ -474,7 +474,7 @@ async def route_query(request: ChatStreamRequest) -> AsyncIterator[str]:
 
     messages = [SystemMessage(content=system_prompt)]
     for msg in request.context_history:
-        if msg.role in ("user", "reviewer"):
+        if msg.role == "user":
             messages.append(HumanMessage(content=msg.content))
         elif msg.role == "assistant":
             messages.append(AIMessage(content=msg.content))

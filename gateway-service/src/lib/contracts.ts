@@ -3,7 +3,6 @@
 export type WidgetChatRequest = {
   sessionId: string;
   userId: string;
-  role: "user" | "reviewer";
   message: string;
 };
 
@@ -11,10 +10,9 @@ export type WidgetChatRequest = {
 
 export type AiChatRequest = {
   conversation_id: string;
-  role: "user" | "reviewer";
   query: string;
   context_history: Array<{
-    role: "user" | "reviewer" | "assistant";
+    role: "user" | "assistant";
     content: string;
   }>;
 };

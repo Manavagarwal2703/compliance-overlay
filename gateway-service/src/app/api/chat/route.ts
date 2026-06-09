@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
-import { verifyJwt, extractUserId } from "@/lib/auth";
+import { verifyJwt, extractUserId, extractToken } from "@/lib/auth";
 import type { AiChatRequest, SseChunkPayload, WidgetChatRequest } from "@/lib/contracts";
 
 // ── CORS ────────────────────────────────────────────────────────────────────
@@ -38,9 +38,6 @@ function buildCorsHeaders(requestOrigin: string | null): Record<string, string> 
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    // Required when using a specific origin (not *) so browsers send cookies
-    // and the Authorization header in cross-origin requests.
-    ...(allowedOrigin !== "*" ? { "Access-Control-Allow-Credentials": "true" } : {}),
   };
 }
 
@@ -123,14 +120,13 @@ export async function POST(request: Request): Promise<Response> {
   let authenticatedUserId: string | null = null;
 
   if (REQUIRE_AUTH) {
-    const authHeader = request.headers.get("Authorization") ?? "";
-    if (!authHeader.startsWith("Bearer ")) {
+    const token = extractToken(request);
+    if (!token) {
       return Response.json(
-        { error: "Unauthorized: missing or malformed Authorization header" },
+        { error: "Unauthorized: missing or malformed token" },
         { status: 401, headers: corsHeaders }
       );
     }
-    const token = authHeader.slice(7).trim();
     try {
       const payload = verifyJwt(token);
       authenticatedUserId = extractUserId(payload);
@@ -152,15 +148,15 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Invalid JSON body" }, { status: 400, headers: corsHeaders });
   }
 
-  const { sessionId, role, message } = body;
+  const { sessionId, message } = body;
   // In auth mode userId comes from the JWT; in dev mode it comes from the body.
   const userId: string = REQUIRE_AUTH
     ? (authenticatedUserId as string)
     : (body.userId ?? "");
 
-  if (!sessionId || !userId || !role || !message) {
+  if (!sessionId || !userId || !message) {
     return Response.json(
-      { error: "sessionId, userId, role, and message are required" },
+      { error: "sessionId, userId, and message are required" },
       { status: 400, headers: corsHeaders }
     );
   }
@@ -172,11 +168,10 @@ export async function POST(request: Request): Promise<Response> {
       create: {
         id: sessionId,
         userId,
-        role,
         title: deriveTitle(message),
       },
       update: {
-        // If session already exists do not overwrite title/role
+        // If session already exists do not overwrite title
         updatedAt: new Date(),
       },
     });
@@ -251,11 +246,6 @@ export async function POST(request: Request): Promise<Response> {
 
   const aiPayload: AiChatRequest = {
     conversation_id: sessionId,
-    // Always send "user" to the AI service regardless of the role in the
-    // incoming request. The ai-service Pydantic models accept exactly
-    // "user" or "reviewer"; defaulting to "user" ensures the AI pipeline
-    // does not crash on unexpected role values from the widget.
-    role: "user",
     query: message,
     context_history: contextHistory,
   };

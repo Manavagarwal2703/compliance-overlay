@@ -20,12 +20,11 @@ from pydantic import BaseModel, Field
 
 
 class ContextMessage(BaseModel):
-    role: Literal["user", "reviewer", "assistant"]
+    role: Literal["user", "assistant"]
     content: str
 
 
 class ChatStreamRequest(BaseModel):
     conversation_id: str = Field(..., description="Maps to gateway sessionId")
-    role: Literal["user", "reviewer"]
     query: str
     context_history: list[ContextMessage] = Field(default_factory=list)

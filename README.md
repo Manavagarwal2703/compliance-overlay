@@ -197,7 +197,7 @@ The widget implements a **dual health check** on mount via `initializeSystem()`,
 
 | Probe | Endpoint | Verifies |
 |-------|----------|----------|
-| Database | `GET /api/chat/history?userId=…` | Gateway + Postgres connectivity |
+| Database | `GET /api/chat/history` | Gateway + Postgres connectivity (requires auth token) |
 | AI service | `GET /api/health` | AI microservice liveness (via gateway proxy) |
 
 ### `systemStatus` State Machine
@@ -215,7 +215,7 @@ The widget implements a **dual health check** on mount via `initializeSystem()`,
 
 | Variable | Service | Description |
 |----------|---------|-------------|
-| `REQUIRE_AUTH` | Gateway | When `true` (default), every `POST /api/chat` and `GET /api/chat/history` requires a valid `Authorization: Bearer <JWT>` header. When `false`, JWT verification is bypassed and `userId` from the request body is trusted directly (dev only). |
+| `REQUIRE_AUTH` | Gateway | When `true` (default), `POST /api/chat` requires a valid `Authorization: Bearer <JWT>` header. When `false`, JWT verification is bypassed and `userId` from the request body is trusted directly (dev only). **Note:** History routes strictly enforce JWT auth regardless of this flag. |
 | `JWT_SECRET` | Gateway | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Used by `src/lib/auth.ts` via Node.js's built-in `crypto` module. Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `ALLOWED_ORIGINS` | Gateway | Comma-separated origin allowlist for CORS. When empty, defaults to wildcard `*` (dev only). When set, only matching origins receive `Access-Control-Allow-Origin: <origin>` plus `Access-Control-Allow-Credentials: true`. |
 
@@ -319,8 +319,9 @@ curl -X POST http://localhost:3000/api/chat `
 You should see streamed `data:` lines arrive in the terminal. Then verify persistence:
 
 ```powershell
-curl "http://localhost:3000/api/chat/history?userId=usr_test"
-curl "http://localhost:3000/api/chat/history/sess_smoke"
+# History routes now strictly require a valid JWT token
+curl -H "Authorization: Bearer <your_jwt>" "http://localhost:3000/api/chat/history"
+curl -H "Authorization: Bearer <your_jwt>" "http://localhost:3000/api/chat/history/sess_smoke"
 ```
 
 ---
@@ -332,7 +333,7 @@ curl "http://localhost:3000/api/chat/history/sess_smoke"
 | Gateway | `DATABASE_URL` | — | **Required.** SQLite connection string (e.g. `file:./gateway_db.sqlite`) |
 | Gateway | `AI_SERVICE_URL` | — | **Required.** Full URL to ai-service `/v1/chat/stream`. Use intranet IP, not `localhost`, when services are on different hosts. |
 | Gateway | `ENABLE_AI_MEMORY` | `true` | When `true`, injects prior conversation turns into Contract B `context_history`. |
-| Gateway | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` and `GET /api/chat/history` require `Authorization: Bearer <JWT>`. When `false`, bypasses JWT check (dev only). |
+| Gateway | `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` requires `Authorization: Bearer <JWT>`. When `false`, bypasses JWT check for chat (dev only). History routes always require JWT. |
 | Gateway | `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). |
 | Gateway | `ALLOWED_ORIGINS` | `""` (wildcard `*`) | Comma-separated origin allowlist for CORS. Empty = `Access-Control-Allow-Origin: *` (dev only). |
 | Widget | `VITE_GATEWAY_URL` | `http://localhost:3000` | Base URL of the gateway, baked into the JS bundle at build time. Set before `npm run build`. |

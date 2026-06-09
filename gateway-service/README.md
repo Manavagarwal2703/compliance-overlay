@@ -67,7 +67,7 @@ AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
 | `DATABASE_URL` | — | **Required.** Full SQLite connection string (e.g. `file:./gateway_db.sqlite`). Read by `prisma.config.ts`. |
 | `AI_SERVICE_URL` | — | **Required.** Contract B endpoint for the AI service. Use the intranet IP when services are on different hosts — do **not** use `localhost` in that case. |
 | `ENABLE_AI_MEMORY` | `true` | When `true`, fetches the last 5 conversation turns from Postgres and injects them into the Contract B `context_history` array. When `false`, always sends `context_history: []`. Does **not** affect the history API endpoints. |
-| `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` and `GET /api/chat/history` require a valid `Authorization: Bearer <JWT>` header. When `false`, skips JWT verification and trusts `userId` in the JSON body (dev / bypass mode). |
+| `REQUIRE_AUTH` | `true` | When `true`, `POST /api/chat` requires a valid `Authorization: Bearer <JWT>` header. When `false`, skips JWT verification and trusts `userId` in the JSON body (dev / bypass mode). **Note:** All history API routes strictly require JWT authentication regardless of this setting. |
 | `JWT_SECRET` | — | **Required when `REQUIRE_AUTH=true`.** HS256 HMAC signing secret (32+ chars). Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
 | `ALLOWED_ORIGINS` | `""` (wildcard `*`) | Comma-separated list of origins permitted for CORS. When empty, falls back to `*` (dev only). Example: `"http://localhost:5173,https://client.example.com"`. |
 
@@ -75,9 +75,9 @@ AI_SERVICE_URL="http://localhost:8000/v1/chat/stream"
 
 ---
 
-## Authentication — `REQUIRE_AUTH`
+## Authentication
 
-The gateway implements an **optional JWT authentication layer** on `POST /api/chat` and `GET /api/chat/history`. The behaviour is controlled by the `REQUIRE_AUTH` environment variable.
+The gateway implements a **JWT authentication layer**. For the `POST /api/chat` route, this is optionally controlled by the `REQUIRE_AUTH` environment variable. For all history and session routes (`/api/chat/history`), a valid JWT is **unconditionally required**.
 
 ### Modes
 
@@ -367,16 +367,16 @@ Access-Control-Allow-Origin: <origin>
 
 ---
 
-### `GET /api/chat/history?userId=<userId>`
+### `GET /api/chat/history`
 
-Returns all `Session` records for the given user, ordered by most recently updated first.
+Returns all `Session` records for the user identified by the verified JWT payload, ordered by most recently updated first.
 
-> **Auth note:** When `REQUIRE_AUTH=true`, this endpoint also requires a valid `Authorization: Bearer <JWT>` header. A missing or invalid token returns `401`.
+> **Auth note:** This endpoint strictly requires a valid `Authorization: Bearer <JWT>` header or an auth cookie. It reads the `userId` directly from the token payload. A missing or invalid token returns `401 Unauthorized`. URL query parameters like `?userId=` are not supported.
 
 **Request:**
 
 ```
-GET /api/chat/history?userId=usr_abc123
+GET /api/chat/history
 ```
 
 **Response — `200 OK`:**
@@ -410,8 +410,7 @@ GET /api/chat/history?userId=usr_abc123
 
 | Status | Cause |
 |--------|-------|
-| `400` | Missing or empty `userId` query parameter |
-| `401` | Missing or invalid `Authorization` header (when `REQUIRE_AUTH=true`) |
+| `401` | Missing or invalid `Authorization` header |
 | `500` | Database error |
 
 ---
@@ -419,6 +418,8 @@ GET /api/chat/history?userId=usr_abc123
 ### `GET /api/chat/history/:sessionId`
 
 Returns all `Message` records for a given session, ordered chronologically (oldest first).
+
+> **Auth note:** This endpoint strictly requires a valid JWT. After fetching the session from the database, it enforces a strict ownership check (`session.userId === extractedJwtUserId`). If they do not match, it returns a `403 Forbidden` response.
 
 **Request:**
 
@@ -462,6 +463,8 @@ GET /api/chat/history/sess_1748956800_abc123
 
 | Status | Cause |
 |--------|-------|
+| `401` | Missing or invalid `Authorization` header |
+| `403` | User does not own this session |
 | `404` | No session found with that ID |
 | `500` | Database error |
 
@@ -470,6 +473,8 @@ GET /api/chat/history/sess_1748956800_abc123
 ### `PATCH /api/chat/history/:sessionId`
 
 Updates the `title` of an existing session. Called by the widget when the user renames a conversation via the inline rename UI.
+
+> **Auth note:** This endpoint strictly requires a valid JWT and enforces the same strict ownership check (`session.userId === extractedJwtUserId`) as the GET route. It returns `403 Forbidden` on mismatch.
 
 **Request body:**
 
@@ -499,6 +504,8 @@ Updates the `title` of an existing session. Called by the widget when the user r
 | Status | Cause |
 |--------|-------|
 | `400` | Missing, empty, or non-string `title` field, or invalid JSON |
+| `401` | Missing or invalid `Authorization` header |
+| `403` | User does not own this session |
 | `404` | No session found with that ID |
 | `500` | Database error |
 

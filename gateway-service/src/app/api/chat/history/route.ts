@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { verifyJwt } from "@/lib/auth";
+import { verifyJwt, extractUserId, extractToken } from "@/lib/auth";
 
-const REQUIRE_AUTH = process.env.REQUIRE_AUTH !== "false";
+
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS: Set<string> = (() => {
@@ -27,7 +27,6 @@ function buildCorsHeaders(requestOrigin: string | null): Record<string, string> 
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    ...(allowedOrigin !== "*" ? { "Access-Control-Allow-Credentials": "true" } : {}),
   };
 }
 
@@ -37,7 +36,7 @@ export async function OPTIONS(request: Request): Promise<Response> {
 }
 
 /**
- * GET /api/chat/history?userId=<userId>
+ * GET /api/chat/history
  *
  * Returns all Session records for the given userId, ordered by most recently
  * updated first.
@@ -48,7 +47,6 @@ export async function OPTIONS(request: Request): Promise<Response> {
  *     {
  *       "id": "sess_abc123",
  *       "userId": "user_42",
- *       "role": "reviewer",
  *       "title": "Check compliance for...",
  *       "createdAt": "2024-01-15T10:30:00.000Z",
  *       "updatedAt": "2024-01-15T10:35:00.000Z"
@@ -60,32 +58,22 @@ export async function GET(request: Request): Promise<Response> {
   const origin = request.headers.get("Origin");
   const corsHeaders = buildCorsHeaders(origin);
 
-  if (REQUIRE_AUTH) {
-    const authHeader = request.headers.get("Authorization") ?? "";
-    if (!authHeader.startsWith("Bearer ")) {
-      return Response.json(
-        { error: "Unauthorized" },
-        { status: 401, headers: corsHeaders }
-      );
-    }
-    const token = authHeader.slice(7).trim();
-    try {
-      verifyJwt(token);
-    } catch (err) {
-      return Response.json(
-        { error: "Unauthorized" },
-        { status: 401, headers: corsHeaders }
-      );
-    }
+  const token = extractToken(request);
+  if (!token) {
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders }
+    );
   }
 
-  const { searchParams } = new URL(request.url);
-  const userId = searchParams.get("userId");
-
-  if (!userId || userId.trim() === "") {
+  let userId: string;
+  try {
+    const payload = verifyJwt(token);
+    userId = extractUserId(payload);
+  } catch (err) {
     return Response.json(
-      { error: "userId query parameter is required" },
-      { status: 400, headers: corsHeaders }
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders }
     );
   }
 
@@ -96,7 +84,6 @@ export async function GET(request: Request): Promise<Response> {
       select: {
         id: true,
         userId: true,
-        role: true,
         title: true,
         createdAt: true,
         updatedAt: true,

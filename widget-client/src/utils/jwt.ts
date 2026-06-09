@@ -16,13 +16,24 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
   }
 }
 
-/** Extract a display name from common JWT claim fields. */
 export function extractUserNameFromJwt(token: string): string | null {
   const payload = decodeJwtPayload(token);
   if (!payload) return null;
 
   const candidate =
     payload.name ?? payload.userName ?? payload.userId ?? payload.sub;
+
+  return typeof candidate === "string" && candidate.trim()
+    ? candidate.trim()
+    : null;
+}
+
+/** Extract userId from common JWT claim fields for Contract A payload. */
+export function extractUserIdFromJwt(token: string): string | null {
+  const payload = decodeJwtPayload(token);
+  if (!payload) return null;
+
+  const candidate = payload.userId ?? payload.sub;
 
   return typeof candidate === "string" && candidate.trim()
     ? candidate.trim()

@@ -2,7 +2,11 @@
 
 import Script from 'next/script';
 
-export default function ChatbotWidget() {
+interface ChatbotWidgetProps {
+  authToken?: string;
+}
+
+export default function ChatbotWidget({ authToken }: ChatbotWidgetProps) {
   return (
     <>
       {/* Load the Vite bundle from the public folder */}
@@ -15,8 +19,7 @@ export default function ChatbotWidget() {
       {/* Mount the web component */}
       <compliance-chat-overlay
         gateway-url="http://localhost:3000/api/chat"
-        user-role="reviewer"
-        user-id="dev_user_001"
+        auth-token={authToken}
         // Pass dynamic suggestions via JSON.stringify
         suggestions={JSON.stringify([
           "Show me the latest audit logs.",

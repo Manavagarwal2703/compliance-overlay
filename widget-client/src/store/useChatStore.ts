@@ -5,11 +5,11 @@ import { extractUserNameFromJwt } from "../utils/jwt";
 // Types
 // ---------------------------------------------------------------------------
 
-export type ChatRole = "user" | "reviewer";
+export type ChatRole = "user" | "assistant";
 
 export type ChatMessage = {
   id: string;
-  role: ChatRole | "assistant";
+  role: ChatRole;
   content: string;
   isStreaming?: boolean;
   /** RAG citation filenames attached via the Contract C `sources` SSE event. */
@@ -36,9 +36,7 @@ export type ChatSession = {
 export type SystemStatus = "connecting" | "online" | "offline" | "unauthorized";
 
 type ChatState = {
-  // ── Identity (injected by host via HTML attributes) ──────────────────────
-  userId: string;
-  userRole: ChatRole;
+  // ── Identity ──────────────────────
   /** Display name extracted from JWT payload (name, userName, userId, or sub). */
   userName: string | null;
 
@@ -72,9 +70,6 @@ type ChatState = {
   authToken: string | null;
 
   // ── Actions ───────────────────────────────────────────────────────────────
-  /** Called once by the Web Component after reading HTML attributes. */
-  initUser: (userId: string, userRole: ChatRole) => void;
-
   setGatewayUrl: (url: string) => void;
   /** Update the auth token from the auth-token HTML attribute. */
   setAuthToken: (token: string | null) => void;
@@ -97,10 +92,10 @@ type ChatState = {
   /** Alias for loadSession — fetches messages for a session with auth + userId. */
   fetchSessionMessages: (sessionId: string) => Promise<void>;
 
-  /** Fetch the list of sessions for a user and populate the sidebar. */
-  loadSessions: (userId: string) => Promise<void>;
+  /** Fetch the list of sessions for the current user. */
+  loadSessions: () => Promise<void>;
 
-  /** Fetch history for the current user (reads userId from store). */
+  /** Fetch history for the current user. */
   fetchHistory: () => Promise<void>;
 
   /**
@@ -137,10 +132,6 @@ function generateId(): string {
 
 function generateSessionId(): string {
   return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function resolveUserId(userId: string): string {
-  return userId || "dev_user_001";
 }
 
 function getGatewayBase(gatewayUrl: string): string {
@@ -199,8 +190,6 @@ const initialSessionId = generateSessionId();
 
 export const useChatStore = create<ChatState>((set, get) => ({
   // ── Identity ──────────────────────────────────────────────────────────────
-  userId: "",
-  userRole: "user",
   userName: null,
 
   // ── Widget visibility ─────────────────────────────────────────────────────
@@ -237,8 +226,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     : "http://localhost:3000/api/chat",
 
   // ── Actions ───────────────────────────────────────────────────────────────
-
-  initUser: (userId, userRole) => set({ userId, userRole }),
 
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
 
@@ -280,8 +267,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   fetchSessionMessages: async (sessionId) => {
-    const { userId, authToken, gatewayUrl } = get();
-    const effectiveUserId = resolveUserId(userId);
+    const { authToken, gatewayUrl } = get();
     const gatewayBase = getGatewayBase(gatewayUrl);
 
     set({
@@ -293,7 +279,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       const res = await fetch(
-        `${gatewayBase}/api/chat/history/${sessionId}?userId=${encodeURIComponent(effectiveUserId)}`,
+        `${gatewayBase}/api/chat/history/${sessionId}`,
         { headers: buildAuthHeaders(authToken) }
       );
       if (!res.ok) throw new Error(`History fetch failed: ${res.status}`);
@@ -327,14 +313,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await get().fetchSessionMessages(sessionId);
   },
 
-  loadSessions: async (userId) => {
+  loadSessions: async () => {
     const { authToken, gatewayUrl } = get();
-    const effectiveUserId = resolveUserId(userId);
     const gatewayBase = getGatewayBase(gatewayUrl);
 
     try {
       const res = await fetch(
-        `${gatewayBase}/api/chat/history?userId=${encodeURIComponent(effectiveUserId)}`,
+        `${gatewayBase}/api/chat/history`,
         { headers: buildAuthHeaders(authToken) }
       );
       if (!res.ok) return;
@@ -354,20 +339,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   fetchHistory: async () => {
-    const { userId } = get();
-    await get().loadSessions(resolveUserId(userId));
+    await get().loadSessions();
   },
 
   initializeSystem: async () => {
-    const { userId, authToken, gatewayUrl } = get();
-    const effectiveUserId = resolveUserId(userId);
+    const { authToken, gatewayUrl } = get();
     const gatewayBase = getGatewayBase(gatewayUrl);
 
     set({ systemStatus: "connecting" });
 
     const [historyResult, healthResult] = await Promise.allSettled([
       fetch(
-        `${gatewayBase}/api/chat/history?userId=${encodeURIComponent(effectiveUserId)}`,
+        `${gatewayBase}/api/chat/history`,
         { headers: buildAuthHeaders(authToken) }
       ),
       fetch(`${gatewayBase}/api/health`, {
@@ -422,7 +405,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         `${gatewayBase}/api/chat/history/${sessionId}`,
         {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+          headers: { 
+            "Content-Type": "application/json",
+            ...buildAuthHeaders(get().authToken)
+          },
           body: JSON.stringify({ title: newTitle }),
         }
       );
@@ -441,7 +427,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       messages: [
         ...s.messages,
-        { id, role: s.userRole, content, timestamp },
+        { id, role: "user", content, timestamp },
       ],
       sessions: upsertSessionOnMessage(s.sessions, s.activeSessionId, content),
     }));

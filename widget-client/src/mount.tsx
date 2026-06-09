@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ChatWidget } from "./components/ChatWidget";
-import { useChatStore, type ChatRole } from "./store/useChatStore";
+import { useChatStore } from "./store/useChatStore";
 import tailwindStyles from "./index.css?inline";
 
 const ELEMENT_TAG = "compliance-chat-overlay";
@@ -12,7 +12,7 @@ class ComplianceChatElement extends HTMLElement {
   private styleEl: HTMLStyleElement | null = null;
 
   static get observedAttributes(): string[] {
-    return ["gateway-url", "open", "user-role", "user-id", "auth-token", "suggestions"];
+    return ["gateway-url", "open", "auth-token", "suggestions"];
   }
 
   connectedCallback(): void {
@@ -43,14 +43,8 @@ class ComplianceChatElement extends HTMLElement {
       useChatStore.getState().setOpen(true);
     }
 
-    // user-role and user-id are injected by the host and passed into the
-    // Zustand store. They drive AI routing and message attribution without
-    // any manual UI toggle inside the widget.
-    const rawRole = this.getAttribute("user-role") ?? "user";
-    const userRole: ChatRole =
-      rawRole === "reviewer" ? "reviewer" : "user";
-    const userId = this.getAttribute("user-id") ?? "";
-    useChatStore.getState().initUser(userId, userRole);
+    // Auth-token handles identity; user-role and user-id are removed
+    // from the host injection to support zero-trust payload architecture.
 
     // auth-token is optional. When present, useChatStream will attach it as
     // Authorization: Bearer <token> on every Contract A POST request.
@@ -104,18 +98,7 @@ class ComplianceChatElement extends HTMLElement {
       case "open":
         useChatStore.getState().setOpen(newValue === "true");
         break;
-      case "user-role": {
-        const role: ChatRole =
-          newValue === "reviewer" ? "reviewer" : "user";
-        const current = useChatStore.getState();
-        useChatStore.getState().initUser(current.userId, role);
-        break;
-      }
-      case "user-id": {
-        const current = useChatStore.getState();
-        useChatStore.getState().initUser(newValue ?? "", current.userRole);
-        break;
-      }
+
       case "auth-token":
         useChatStore.getState().setAuthToken(newValue ?? null);
         break;

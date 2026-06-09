@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useChatStore } from "../store/useChatStore";
 import { formatApiError } from "../utils/apiError";
+import { extractUserIdFromJwt } from "../utils/jwt";
 
 type SsePayload = {
   type: "token" | "done" | "error" | "sources";
@@ -25,8 +26,7 @@ function parseSseLine(line: string): SsePayload | null {
 
 export function useChatStream() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
-  const userId = useChatStore((s) => s.userId);
-  const userRole = useChatStore((s) => s.userRole);
+
   const gatewayUrl = useChatStore((s) => s.gatewayUrl);
   const authToken = useChatStore((s) => s.authToken);
   const isStreaming = useChatStore((s) => s.isStreaming);
@@ -60,13 +60,14 @@ export function useChatStream() {
           (requestHeaders as Record<string, string>)["Authorization"] = `Bearer ${authToken}`;
         }
 
+        const dynamicUserId = authToken ? extractUserIdFromJwt(authToken) : null;
+
         const response = await fetch(gatewayUrl, {
           method: "POST",
           headers: requestHeaders,
           body: JSON.stringify({
             sessionId: activeSessionId,
-            userId: userId || "dev_user_001",
-            role: userRole,
+            userId: dynamicUserId || "dev_user_001",
             message: trimmed,
           }),
         });
@@ -147,8 +148,7 @@ export function useChatStream() {
     },
     [
       activeSessionId,
-      userId,
-      userRole,
+
       gatewayUrl,
       authToken,
       isStreaming,

@@ -11,7 +11,7 @@ The widget talks to the gateway over **Contract A** and consumes **Contract C** 
 ```mermaid
 flowchart LR
   HOST["Host page DOM"]
-  CE["<compliance-chat-overlay\nuser-role='reviewer'\nuser-id='usr_123'>"]
+  CE["<compliance-chat-overlay\nauth-token='<jwt>'>"]
   SHADOW["Shadow Root + inlined Tailwind"]
   REACT["ChatWidget React tree"]
   GW["gateway-service\n:3000/api/chat"]
@@ -60,14 +60,13 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `user-role` | `"user"` \| `"reviewer"` | **Yes** | Role set by the host application. Controls AI semantic routing and message bubble styling. **Read-only** from inside the widget — never toggled by UI interactions. |
-| `user-id` | `string` | **Yes** | Unique identifier for the authenticated user (e.g. `"usr_abc123"`). Sent as `userId` in every Contract A request, stored in the Zustand store, and shown in the sidebar identity badge. |
+
 | `gateway-url` | URL string | No | Override the Contract A endpoint. Default: `http://localhost:3000/api/chat` |
 | `open` | `"true"` | No | If present and `"true"`, the chat panel opens immediately on mount. |
 | `auth-token` | JWT string | No | Optional JWT Bearer token issued by your authentication provider. When provided, every Contract A POST includes an `Authorization: Bearer <token>` header. Required by the gateway when `REQUIRE_AUTH=true`. Omit entirely for dev/bypass mode. |
 | `suggestions` | JSON string | No | Optional JSON-stringified array of strings to override the default Action Cards shown in the empty state. |
 
-> **Important:** `user-role` and `user-id` are set by the **host application** and cannot be changed from inside the widget UI. Changing them via `setAttribute()` after mount is fully supported — `attributeChangedCallback` in `mount.tsx` propagates the new values into the Zustand store automatically.
+
 
 ---
 
@@ -94,8 +93,6 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 ```html
 <compliance-chat-overlay
   gateway-url="https://api.example.com/api/chat"
-  user-role="user"
-  user-id="usr_xyz789"
   auth-token="<jwt-from-your-auth-provider>"
 ></compliance-chat-overlay>
 ```
@@ -117,8 +114,6 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 ```html
 <compliance-chat-overlay
   gateway-url="http://localhost:3000/api/chat"
-  user-role="reviewer"
-  user-id="dev_user_001"
 ></compliance-chat-overlay>
 ```
 
@@ -127,9 +122,7 @@ Styles inside the shadow tree do not leak to the host; host CSS does not pierce 
 ```javascript
 const widget = document.querySelector('compliance-chat-overlay');
 
-// Switch user context at runtime (e.g. after re-authentication)
-widget.setAttribute('user-id', 'usr_newuser');
-widget.setAttribute('user-role', 'user');
+
 
 // Update the auth token (e.g. after a token refresh)
 widget.setAttribute('auth-token', '<refreshed-jwt>');
@@ -301,15 +294,13 @@ Authorization: Bearer <jwt>   ← included only when auth-token attribute is set
 
 {
   "sessionId": "sess_1748956800_abc123",
-  "userId": "usr_abc123",
-  "role": "reviewer",
+  "userId": "dev_user_001",
   "message": "Check Q2 compliance status."
 }
 ```
 
 `sessionId` comes from `useChatStore.activeSessionId`.
-`userId` comes from `useChatStore.userId` (set from `user-id` attribute), falling back to `"dev_user_001"`.
-`role` comes from `useChatStore.userRole` (set from `user-role` attribute).
+`userId` is dynamically extracted from the `auth-token` payload if present, falling back to `"dev_user_001"` for local dev bypass mode.
 
 > **Note:** When the gateway runs with `REQUIRE_AUTH=true`, the `Authorization` header is mandatory and `userId` in the body is ignored — the gateway extracts it from the verified JWT instead.
 
@@ -342,8 +333,7 @@ The entire widget state lives in a single flat Zustand store. No React Context, 
 
 | Field | Type | Set by | Description |
 |-------|------|--------|-------------|
-| `userId` | `string` | `initUser()` | Mirrors the `user-id` HTML attribute |
-| `userRole` | `"user"` \| `"reviewer"` | `initUser()` | Mirrors the `user-role` HTML attribute |
+
 | `userName` | `string \| null` | `setAuthToken()` | Display name extracted from JWT payload; `null` when no token or no name claim |
 | `authToken` | `string \| null` | `setAuthToken()` | Raw JWT from the `auth-token` HTML attribute |
 
@@ -387,7 +377,7 @@ type ChatSession = {
 ```typescript
 type ChatMessage = {
   id: string;
-  role: "user" | "reviewer" | "assistant";
+  role: "user" | "assistant";
   content: string;
   isStreaming?: boolean; // true while SSE tokens are still arriving
   sources?: string[];   // RAG citation filenames — populated by the Contract C `sources` event
@@ -399,7 +389,7 @@ type ChatMessage = {
 
 | Action | Signature | Description |
 |--------|-----------|-------------|
-| `initUser` | `(id, role) => void` | Called once by `mount.tsx` after reading HTML attributes. Seeds `userId` and `userRole`. |
+
 | `setGatewayUrl` | `(url) => void` | Updates the Contract A endpoint from the `gateway-url` attribute. |
 | `setAuthToken` | `(token \| null) => void` | Stores the JWT and decodes `userName` from its payload via `extractUserNameFromJwt()`. |
 | `toggleOpen` | `() => void` | Toggles panel visibility. |
@@ -414,7 +404,7 @@ type ChatMessage = {
 | `fetchHistory` | `() => Promise<void>` | Calls `loadSessions` for the current `userId` (reads from store). |
 | `initializeSystem` | `() => Promise<void>` | Dual health check on mount: `GET /api/chat/history` + `GET /api/health`. Sets `systemStatus` and hydrates `sessions` when both succeed. |
 | `renameSession` | `(sessionId, newTitle) => Promise<void>` | **Optimistically** updates the local `sessions` array then PATCHes `PATCH /api/chat/history/:sessionId`. Rolls back and sets `error` on failure. |
-| `addUserMessage` | `(content) => string` | Appends a `{ role: userRole, content, timestamp }` message and upserts the session into the sidebar list; returns the generated ID. |
+| `addUserMessage` | `(content) => string` | Appends a `{ role: "user", content, timestamp }` message and upserts the session into the sidebar list; returns the generated ID. |
 | `startAssistantMessage` | `() => string` | Appends an empty streaming assistant message with `isStreaming: true`; returns its ID. |
 | `appendStreamToken` | `(token) => void` | Appends a token string to the last assistant message's `content`. |
 | `setStreamSources` | `(sources: string[]) => void` | Attaches RAG citation filenames to the currently-streaming assistant message. Called when the Contract C `sources` SSE event is received. |
@@ -540,12 +530,10 @@ Open [http://localhost:5173](http://localhost:5173). The dev `index.html` mounts
 ```html
 <compliance-chat-overlay
   gateway-url="http://localhost:3000/api/chat"
-  user-role="reviewer"
-  user-id="dev_user_001"
 ></compliance-chat-overlay>
 ```
 
-To test the **user** role, edit `index.html` and change `user-role="user"`.
+
 
 ### Build Library Bundle
 
@@ -597,7 +585,7 @@ widget-client/
 
 **Do not change without coordinating with gateway and AI service:**
 
-- POST body field names (`sessionId`, `userId`, `role`, `message`) — Contract A
+- POST body field names (`sessionId`, `userId`, `message`) — Contract A
 - SSE event field names (`type`, `content`) — Contract C
 
 ---
@@ -606,14 +594,13 @@ widget-client/
 
 | Issue | Check |
 |-------|-------|
-| `user-role` not applied | Ensure attribute is set before element connects, or rely on `attributeChangedCallback` |
-| Role shows `"user"` unexpectedly | Verify `user-role="reviewer"` is kebab-case |
+
 | CORS error in console | Gateway is running and `gateway-url` attribute is correct |
 | Stream never ends | AI service must emit a `{"type":"done"}` event to signal completion |
 | Styles look unstyled | Build must inline CSS; verify `?inline` import in `mount.tsx` |
 | `502` from fetch | Start AI service and gateway before the widget |
 | Sidebar not visible | Intentional — `overflow-hidden` on the panel container clips the drawer until opened |
-| `userId` missing in gateway payload | Verify `user-id` attribute is set on the element |
+
 | `401 Unauthorized` from gateway | Gateway has `REQUIRE_AUTH=true`. Either set `auth-token` on the element or set `REQUIRE_AUTH=false` for local testing. |
 | Token rejected with "signature failed" | Verify the JWT was signed with the same `JWT_SECRET` configured in gateway `.env`. |
 | Citation pills not appearing | Verify the AI service has `ENABLE_CITATIONS=true` and that a ChromaDB-backed RAG query was made (general chat queries do not emit a `sources` event). |

@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
+import { verifyJwt, extractUserId, extractToken } from "@/lib/auth";
+
+
 
 // ── CORS ────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS: Set<string> = (() => {
@@ -25,7 +28,6 @@ function buildCorsHeaders(requestOrigin: string | null): Record<string, string> 
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "GET, PATCH, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    ...(allowedOrigin !== "*" ? { "Access-Control-Allow-Credentials": "true" } : {}),
   };
 }
 
@@ -70,6 +72,24 @@ export async function GET(
   const origin = request.headers.get("Origin");
   const corsHeaders = buildCorsHeaders(origin);
 
+  let verifiedUserId: string;
+  const token = extractToken(request);
+  if (!token) {
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders }
+    );
+  }
+  try {
+    const payload = verifyJwt(token);
+    verifiedUserId = extractUserId(payload);
+  } catch (err) {
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders }
+    );
+  }
+
   const { sessionId } = await params;
 
   if (!sessionId) {
@@ -83,13 +103,20 @@ export async function GET(
     // Verify the session exists before fetching messages.
     const session = await prisma.session.findUnique({
       where: { id: sessionId },
-      select: { id: true },
+      select: { id: true, userId: true },
     });
 
     if (!session) {
       return Response.json(
         { error: "Session not found" },
         { status: 404, headers: corsHeaders }
+      );
+    }
+
+    if (session.userId !== verifiedUserId) {
+      return Response.json(
+        { error: "Forbidden: You do not own this session" },
+        { status: 403, headers: corsHeaders }
       );
     }
 
@@ -147,6 +174,24 @@ export async function PATCH(
 
   const { sessionId } = await params;
 
+  let verifiedUserId: string;
+  const token = extractToken(request);
+  if (!token) {
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders }
+    );
+  }
+  try {
+    const payload = verifyJwt(token);
+    verifiedUserId = extractUserId(payload);
+  } catch (err) {
+    return Response.json(
+      { error: "Unauthorized" },
+      { status: 401, headers: corsHeaders }
+    );
+  }
+
   // ── Parse and validate request body ────────────────────────────────────────
   let body: unknown;
   try {
@@ -176,13 +221,20 @@ export async function PATCH(
     // Verify the session exists before attempting an update.
     const existing = await prisma.session.findUnique({
       where: { id: sessionId },
-      select: { id: true },
+      select: { id: true, userId: true },
     });
 
     if (!existing) {
       return Response.json(
         { error: "Session not found" },
         { status: 404, headers: corsHeaders }
+      );
+    }
+
+    if (existing.userId !== verifiedUserId) {
+      return Response.json(
+        { error: "Forbidden: You do not own this session" },
+        { status: 403, headers: corsHeaders }
       );
     }
 
