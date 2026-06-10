@@ -1,0 +1,104 @@
+To make the AI answer purely from an OT (Operational Technology) Cyber Security perspective, we need to update two specific prompts in your `semantic_router.py` file. 
+
+We need to change the **General Intelligence Prompt** (to give the AI its new OT persona) and slightly tweak the **Entity Extractor Prompt** (so it knows that OT-specific terms like SCADA or IEC 62443 should be routed correctly).
+
+Here are the exact steps and explanations for both.
+
+### Step 1: Update the General Intelligence Persona
+**File:** `c:\dev\ABB Chatbot Overlay\ai-service\app\routers\semantic_router.py`
+**Location:** Scroll to `_GENERAL_INTELLIGENCE_PROMPT` (around line 376).
+**Explanation:** This is the prompt the AI uses when answering questions without searching the database. By strictly defining its role as an "OT Cyber Security Expert", it will automatically filter all of its world knowledge (like "compliance") through an industrial/OT lens rather than a generic IT/legal lens.
+
+**Replace the existing prompt with this:**
+```python
+_GENERAL_INTELLIGENCE_PROMPT = (
+    "You are a highly specialized OT (Operational Technology) and ICS (Industrial Control Systems) Cyber Security Assistant. "
+    "You must answer all broad industry questions strictly through the lens of OT cybersecurity. "
+    "For example, if asked 'what is compliance?', you should explain it specifically in the context of industrial standards (like IEC 62443, NIS2, NERC CIP) rather than generic IT, legal, or financial compliance. "
+    "Be concise, accurate, and professional. "
+    "If the user asks a question about specific company policies, audits, or internal security controls, "
+    "let them know you can answer those more precisely if they provide the relevant internal policy or report context."
+)
+```
+
+### Step 2: Update the Extractor Routing Rules
+**File:** Same file (`semantic_router.py`)
+**Location:** Scroll to the `extract_entities` function's system prompt (around line 223).
+**Explanation:** Your router currently uses examples like "what is GDPR?" or "what is AI?" to teach the AI what counts as a "general" question. We need to replace these with OT Security examples so the router doesn't accidentally send OT questions to the internal database (unless the user explicitly asks for internal policies).
+
+**Find "CRITICAL RULE 2" and update the examples to look like this:**
+```python
+            "CRITICAL RULE 2 — General knowledge vs. Internal documents:\n"
+            "  - Questions about broad industry concepts, definitions, or OT security standards "
+            "(e.g. 'what is OT cybersecurity?', 'explain IEC 62443', 'what is a PLC?', "
+            "'explain SCADA vulnerabilities', 'what is compliance in ICS?') are GENERAL KNOWLEDGE. "
+            "For these: set is_general_chat=True, needs_kb=False, needs_report=False.\n"
+```
+
+**(Optional) Update the `QueryExtraction` Schema Definitions**
+If you want to be extremely thorough, you can also update the descriptions inside the `QueryExtraction` class (around line 179). Specifically, change the `is_general_chat` description to use the same OT examples:
+```python
+            "Examples that are TRUE: "
+            "'hi', 'what is OT security?', 'explain IEC 62443', 'what is a SCADA system?', "
+            "'explain air-gapping', 'what is compliance in ICS?'. "
+```
+
+**Why this works:** 
+By making these three changes, the Extractor will confidently route questions like "What is compliance?" down the general chat path, and the General Intelligence Prompt will force the LLM to answer that question specifically using OT security concepts!
+
+
+
+
+
+
+
+
+Edited prompts.txt
+Viewed prompts.txt:37-54
+
+This happens because "Security Management Plan" (or SMP) is a standard industry term. Since the user didn't explicitly say "ABB's Security Management Plan," the LLM assumed they were asking for a dictionary definition of what an SMP is, so it sent the question down the "General Chat" route.
+
+When you added "of ABB," the LLM recognized it as "THIS COMPANY'S internal policy" and correctly sent it to the Knowledge Base (KB).
+
+### How to Fix It
+To fix this, we need to teach the Extractor that when an employee asks about a specific plan, policy, or procedure, they are implicitly asking about *our* internal company documents, even if they forget to type the company name!
+
+Here are the exact steps:
+
+**File:** `c:\dev\ABB Chatbot Overlay\ai-service\app\routers\semantic_router.py`
+**Location:** Scroll to the `extract_entities` function (around line 223) where we set the `CRITICAL RULE 2`.
+
+**Step 1:** Right below the bullet point for "THIS COMPANY'S internal policies...", add a specific instruction telling the LLM to assume ownership of plans and policies. 
+
+Update that section of the prompt to look like this:
+
+```python
+            "  - Questions about THIS COMPANY'S internal policies, rules, or audit results "
+            "require the internal knowledge base or report. "
+            "For these: set needs_kb=True or needs_report=True as appropriate, "
+            "and is_general_chat=False.\n"
+            "  - IMPORTANT: If a user asks about a specific plan, procedure, or policy "
+            "(e.g., 'Security Management Plan', 'SMP', 'Incident Response Plan', 'Access Control Policy'), "
+            "assume they are asking about our internal documents and set needs_kb=True, "
+            "even if they don't explicitly mention the company name.\n\n"
+```
+
+**Step 2 (Optional but Recommended):** 
+Update the description of `needs_kb` inside the `QueryExtraction` class (around line 180) to reinforce this:
+
+```python
+class QueryExtraction(BaseModel):
+    needs_kb: bool = Field(
+        description=(
+            "True ONLY if the query asks about THIS COMPANY'S internal compliance "
+            "policies, internal rules, internal standards, or internal FAQs stored in "
+            "the knowledge base. "
+            "ALSO True if the user asks about a specific plan like the 'Security Management Plan' (SMP), "
+            "assuming they mean our internal plan. "
+            "Set to False for broad industry definitions or general concepts."
+        )
+    )
+```
+
+**Explanation of the Fix:**
+By explicitly mapping terms like "Security Management Plan" and "SMP" to `needs_kb=True`, the Extractor will no longer treat them as general knowledge. It will realize the user is asking for internal documentation and correctly trigger the ChromaDB vector search to fetch your company's actual SMP document!
